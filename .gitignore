@@ -5,3 +5,6 @@
 *.pyc
 *.pyo
 *.pyd
+*.env
+**/sqlite_data/**/*
+*.log
