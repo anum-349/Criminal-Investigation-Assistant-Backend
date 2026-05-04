@@ -1,8 +1,14 @@
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# REQUEST schemas — what the frontend sends
+# ════════════════════════════════════════════════════════════════════════════
+
 class UserRegister(BaseModel):
+    """POST /api/auth/register"""
     username:    str = Field(min_length=3, max_length=80)
     password:    str = Field(min_length=8, max_length=128)
     role:        str = "investigator"
@@ -11,13 +17,18 @@ class UserRegister(BaseModel):
 
 
 class UserLogin(BaseModel):
+    """POST /api/auth/login
+
+    `identifier` accepts EITHER a username OR a badge_number — backend
+    matches both columns. This is what gives the frontend flexibility.
+    """
     identifier:  str = Field(min_length=3, description="Username or badge number")
     password:    str = Field(min_length=1)
     secret_code: Optional[str] = None   # required only for admin role
 
 
 class UserUpdate(BaseModel):
-    """Pydantic v2 — Optional[X] alone is required, so explicit `= None`."""
+    """PUT /api/auth/profile — common user fields editable by anyone."""
     model_config = ConfigDict(extra="ignore")
 
     email:        Optional[EmailStr] = None
@@ -27,18 +38,19 @@ class UserUpdate(BaseModel):
 
 
 class InvestigatorUpdate(UserUpdate):
+    """PUT /api/auth/investigator/profile — extends UserUpdate."""
     department:     Optional[str] = None
     rank:           Optional[str] = None
     shift:          Optional[str] = None
     specialization: Optional[str] = None
 
 
-class TokenResponse(BaseModel):
-    """What login/register return. Frontend stores access_token and uses
-    it for the Authorization: Bearer header on every request."""
-    access_token: str
-    token_type:   str = "bearer"
-    id:           int
-    username:     str
-    badge_number: Optional[str] = None
-    role:         str
+class PasswordChange(BaseModel):
+    """POST /api/auth/change-password
+
+    The backend's _validate_password() is the source of truth on
+    complexity rules. Frontend can mirror length-min for instant feedback,
+    but the backend must always re-check.
+    """
+    current_password: str = Field(min_length=1, description="Current password (for verification)")
+    new_password:     str = Field(min_length=8, max_length=128, description="New password (min 8 chars, must contain upper/lower/digit)")

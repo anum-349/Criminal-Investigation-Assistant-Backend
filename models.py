@@ -503,7 +503,10 @@ class Case(Base):
         "CaseLink", foreign_keys="CaseLink.target_case_id",
         back_populates="target_case",
     )
-
+    activities = relationship(
+        "Activity", back_populates="case", cascade="all, delete-orphan"
+    )
+    
 # SECTION 5 — CRIME-TYPE SUBTYPES (1:1 with Case)
 class MurderDetails(Base):
     __tablename__ = "murder_details"
@@ -1012,6 +1015,26 @@ class Lead(Base):
     suggested_suspect = relationship("CaseSuspect")
     similar_case      = relationship("Case",        foreign_keys=[similar_case_id])
     created_by        = relationship("User")
+
+class Activity(Base):
+    """
+    Activity feed entry. Every case event (registration, status change,
+    lead generated, etc.) creates a row here. The dashboard reads the
+    most recent N rows for the logged-in investigator.
+    """
+    __tablename__ = "activities"
+ 
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    type = Column(String, default="update")
+ 
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+ 
+    case = relationship("Case", back_populates="activities")
+    user = relationship("User")
 
 class CaseLink(Base):
     __tablename__ = "case_links"

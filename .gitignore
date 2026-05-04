@@ -6,8 +6,5 @@
 *.pyo
 *.pyd
 *.env
-<<<<<<< HEAD
 **/sqlite_data/**/*
 *.log
-=======
->>>>>>> 46d9b9d64480d39c6d0236dc18ce3912da86ad75

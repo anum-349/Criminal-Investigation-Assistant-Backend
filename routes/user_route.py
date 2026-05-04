@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from db import get_db
 from schemas.user_schema import (
-    UserRegister, UserLogin, UserUpdate, InvestigatorUpdate, TokenResponse,
+    UserRegister, UserLogin, UserUpdate, InvestigatorUpdate, PasswordChange)
+from schemas.response_schema import (
+    TokenResponse, MeResponse, UserResponse, InvestigatorProfileResponse,
+    MessageResponse,
 )
-from services.user_service import (
-    register_user, login_user,
-    update_user_profile, update_investigator_profile,
-)
+
 from dependencies.auth import get_current_user
 from models import User
+from services.user_service import change_password, login_user, logout_user, register_user, update_investigator_profile, update_user_profile
 
 router = APIRouter()
 
@@ -18,7 +19,11 @@ router = APIRouter()
 # ─── REGISTER ────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=TokenResponse)
-def register(user: UserRegister, db: Session = Depends(get_db)):
+def register(
+    user: UserRegister,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     try:
         return register_user(
             db,
@@ -27,6 +32,7 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
             role=user.role,
             secret_code=user.secret_code,
             email=user.email,
+            request=request,
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -35,63 +41,64 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
 # ─── LOGIN ───────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-def login(user: UserLogin, db: Session = Depends(get_db)):
+def login(
+    user: UserLogin,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     try:
         return login_user(
             db,
             identifier=user.identifier,
             password=user.password,
             secret_code=user.secret_code,
+            request=request,
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-# ─── /me — token validation + current user info ──────────────────────────────
-# This is the endpoint the FRONTEND should call on page load to verify
-# the stored token is still valid. If it returns 200, stay logged in.
-# If 401, clear the token and redirect to login.
-# This is the fix for "asks login again after every refresh" — the bug
-# was server-side (decode used wrong key), but the frontend should also
-# adopt /me as its session-check endpoint.
+# ─── LOGOUT ──────────────────────────────────────────────────────────────────
 
-@router.get("/me")
+@router.post("/logout", response_model=MessageResponse)
+def logout(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Writes the LOGOUT audit row. The frontend should call this BEFORE
+    clearing its stored token.
+
+    JWTs are stateless — we can't actually invalidate the token server-side
+    without a token blocklist. Frontend is still responsible for dropping
+    the token from local/sessionStorage.
+    """
+    return logout_user(db, current_user, request=request)
+
+
+# ─── /me ─────────────────────────────────────────────────────────────────────
+
+@router.get("/me", response_model=MeResponse)
 def get_me(current_user: User = Depends(get_current_user)):
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "badge_number": current_user.badge_number,
-        "email": current_user.email,
-        "role": current_user.role,
-        "status": current_user.status,
-        "picture_url": current_user.picture_url,
-        "last_login": current_user.last_login,
-    }
+    return current_user   # Pydantic v2 + from_attributes=True handles ORM → schema
 
 
 # ─── PROFILE UPDATES ─────────────────────────────────────────────────────────
 
-@router.put("/profile")
+@router.put("/profile", response_model=UserResponse)
 def complete_profile(
     data: UserUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        user = update_user_profile(db, current_user.id, data.model_dump(exclude_unset=True))
-        return {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "contact_info": user.contact_info,
-            "address": user.address,
-            "picture_url": user.picture_url,
-        }
+        return update_user_profile(db, current_user.id, data.model_dump(exclude_unset=True))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.put("/investigator/profile")
+@router.put("/investigator/profile", response_model=InvestigatorProfileResponse)
 def complete_investigator_profile(
     data: InvestigatorUpdate,
     db: Session = Depends(get_db),
@@ -105,6 +112,27 @@ def complete_investigator_profile(
     try:
         return update_investigator_profile(
             db, current_user.id, data.model_dump(exclude_unset=True)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ─── PASSWORD CHANGE ─────────────────────────────────────────────────────────
+
+@router.post("/change-password", response_model=MessageResponse)
+def change_my_password(
+    data: PasswordChange,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return change_password(
+            db,
+            current_user,
+            data.current_password,
+            data.new_password,
+            request=request,
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
