@@ -2,6 +2,7 @@ import os
 import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,23 +12,23 @@ from routes import investigator_route, main_route, user_route
 
 load_dotenv()
 
-# ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s  %(levelname)-7s  %(name)s  %(message)s",
 )
 log = logging.getLogger("app")
 
-
-# ─── Schema auto-create (dev only) ───────────────────────────────────────────
-# In production you'd run Alembic migrations — but for FYP/dev this is fine.
-# Gate it behind an env var so the demo server doesn't trip over restarts.
 if os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true":
     Base.metadata.create_all(bind=engine)
     log.info("Schema ensured (AUTO_CREATE_TABLES=true)")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info(f"{app.title} v{app.version} starting up")
+    log.info(f"Docs available at /docs")
+    yield
+    log.info(f"{app.title} shutting down")
 
-# ─── App ─────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="AI-Powered Criminal Investigation Assistant",
     description=(
@@ -37,6 +38,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", "uploads")
@@ -97,11 +99,6 @@ def health_db():
             content={"status": "error", "db": "unreachable", "detail": str(e)},
         )
 
-
-# ─── Global exception handler ────────────────────────────────────────────────
-# Catches anything that escapes the routers. FastAPI's default returns an
-# HTML stack trace which is messy for an API. This returns clean JSON and
-# logs the full traceback server-side.
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     log.exception(f"Unhandled error on {request.method} {request.url.path}")
@@ -112,15 +109,3 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "path":   request.url.path,
         },
     )
-
-
-# ─── Startup banner ──────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def on_startup():
-    log.info(f"{app.title} v{app.version} starting up")
-    log.info(f"Docs available at /docs")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    log.info(f"{app.title} shutting down")

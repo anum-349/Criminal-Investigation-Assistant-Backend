@@ -1,45 +1,39 @@
-from datetime import datetime, date
-from typing import List, Optional, Tuple
+from datetime import UTC, datetime, date
+from typing import List, Optional
 import secrets
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session, joinedload
 from fastapi import Request, HTTPException
 
-import os                                                        # NEW
-from models import EvidencePhoto                                  # NEW
-from services.case_evidence_service import (                      # NEW
-    _decode_data_url, _ext_for_mime,                              # NEW
-    UPLOADS_ROOT,                                                 # NEW
+import os                                                        
+from models import EvidencePhoto                                  
+from services.case_evidence_service import (                      
+    _decode_data_url, _ext_for_mime,                              
+    UPLOADS_ROOT,                                                 
 )  
 
 from models import (
     User, Investigator, Person,
-    Case, CaseStatus, CaseType, Severity,
-    Activity,
+    Case, Severity, Activity,
     CaseSuspect, SuspectStatus,
     CaseVictim, VictimStatus,
     CaseWitness, WitnessCredibility,
-    Evidence, EvidenceType,
-    Lead,
+    Evidence, EvidenceType, Lead,
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
 from schemas.case_detail_schema import (
-    CaseHeader, CaseStats, CaseDetailResponse,
-    TimelineEventOut, AddResult,
+    AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse,
+    TimelineEventOut, AddTimelineResult,
     SuspectInput, EvidenceInput, VictimInput, WitnessInput,
 )
 
-
-# ─── ID generators ─────────────────────────────────────────────────────────
-# Mirrors the JS helpers in caseEventConstants.js — short, sortable, unique.
 
 def _short_id(prefix: str) -> str:
     ts = int(datetime.utcnow().timestamp() * 1000)
     rand = secrets.token_hex(2).upper()
     return f"{prefix}-{ts:X}-{rand}"
-
 
 def _next_event_id() -> str:    return _short_id("EVT")
 def _next_suspect_id() -> str:  return _short_id("S")
@@ -47,8 +41,6 @@ def _next_victim_id() -> str:   return _short_id("V")
 def _next_witness_id() -> str:  return _short_id("W")
 def _next_evidence_id() -> str: return _short_id("E")
 
-
-# ─── Lookup helpers ────────────────────────────────────────────────────────
 
 def _severity_id_by_label(db: Session, label: Optional[str]) -> Optional[int]:
     if not label:
@@ -183,9 +175,6 @@ def _ymd(d) -> str:
     return ""
 
 
-
-# ═══ Public — Add Suspect ══════════════════════════════════════════════════
-
 def add_suspect(
     db: Session,
     *,
@@ -193,7 +182,7 @@ def add_suspect(
     case_id: str,
     request: Optional[Request],
     suspects: List[SuspectInput],
-) -> AddResult:
+) -> AddTimelineResult:
     case = _resolve_case(db, user=user, case_id=case_id)
 
     created_ids: List[str] = []
@@ -237,10 +226,8 @@ def add_suspect(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to add suspect: {e}")
 
-    return AddResult(created_ids=created_ids, timeline_events=timeline_out)
+    return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
-
-# ═══ Public — Add Evidence ═════════════════════════════════════════════════
 
 def add_evidence(
     db: Session,
@@ -249,7 +236,7 @@ def add_evidence(
     case_id: str,
     request: Optional[Request],
     evidences: List[EvidenceInput],
-) -> AddResult:
+) -> AddTimelineResult:
     """
     Insert one row per item in `evidences`, plus any photos the user attached
     in the dialog. Each Evidence row writes the standard triple
@@ -345,9 +332,8 @@ def add_evidence(
             except Exception: pass
         raise HTTPException(status_code=500, detail=f"Failed to add evidence: {ex}")
 
-    return AddResult(created_ids=created_ids, timeline_events=timeline_out)
+    return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
-# ═══ Public — Add Victim ═══════════════════════════════════════════════════
 
 def add_victim(
     db: Session,
@@ -356,7 +342,7 @@ def add_victim(
     case_id: str,
     request: Optional[Request],
     victims: List[VictimInput],
-) -> AddResult:
+) -> AddTimelineResult:
     case = _resolve_case(db, user=user, case_id=case_id)
 
     created_ids: List[str] = []
@@ -412,10 +398,8 @@ def add_victim(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to add victim: {e}")
 
-    return AddResult(created_ids=created_ids, timeline_events=timeline_out)
+    return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
-
-# ═══ Public — Add Witness ══════════════════════════════════════════════════
 
 def add_witness(
     db: Session,
@@ -424,7 +408,7 @@ def add_witness(
     case_id: str,
     request: Optional[Request],
     witnesses: List[WitnessInput],
-) -> AddResult:
+) -> AddTimelineResult:
     case = _resolve_case(db, user=user, case_id=case_id)
 
     created_ids: List[str] = []
@@ -478,11 +462,8 @@ def add_witness(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to add witness: {e}")
 
-    return AddResult(created_ids=created_ids, timeline_events=timeline_out)
+    return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
-
-
-# ─── Timeline / Activity / Audit triple-write ──────────────────────────────
 
 def _log_action(
     db: Session,
@@ -566,13 +547,34 @@ def _log_action(
     return ev
 
 
-def _timeline_to_out(ev: TimelineEvent, case_id: str) -> TimelineEventOut:
+def _timeline_to_out(ev: "TimelineEvent", case_id: str) -> "TimelineEventOut":
     """Convert a TimelineEvent ORM row to the response shape."""
+    is_system = (ev.event_source or "").upper() == "SYSTEM"
+    is_ai = (ev.event_source or "").upper() == "AI"
+
+    # event_type display:
+    # - System events: come from a lkp_timeline_event_types row.
+    # - Manual events: the user picked a MANUAL_EVENT_TYPES label which we
+    #   stored on a lkp row too (see _resolve_manual_event_type_id below).
+    if ev.event_type and ev.event_type.label:
+        event_type_label = ev.event_type.label
+    else:
+        # Fallback for legacy rows
+        event_type_label = "Manual Entry" if not is_system else (ev.event_source or "")
+
+    follow_up_str = None
+    if ev.follow_up_date:
+        # Stored as a date object; serialize to YYYY-MM-DD for the JSON wire
+        try:
+            follow_up_str = ev.follow_up_date.strftime("%Y-%m-%d")
+        except Exception:
+            follow_up_str = None
+
     return TimelineEventOut(
         id=ev.event_id,
         case_id=case_id,
-        event_source="system" if (ev.event_source or "").upper() == "SYSTEM" else "manual",
-        event_type=ev.event_type.label if ev.event_type else (ev.event_source or ""),
+        event_source="system" if is_system or is_ai else "manual",
+        event_type=event_type_label,
         title=ev.title,
         description=ev.description,
         officer_name=ev.officer_name,
@@ -583,10 +585,11 @@ def _timeline_to_out(ev: TimelineEvent, case_id: str) -> TimelineEventOut:
         time=ev.event_time,
         created_at=ev.created_at,
         editable=bool(ev.editable),
+        # New fields
+        attachment_note=ev.attachment_note,
+        follow_up_required=bool(ev.follow_up_required),
+        follow_up_date=follow_up_str,
     )
-
-
-# ═══ Public — GET case detail ══════════════════════════════════════════════
 
 def get_case_detail(
     db: Session,
@@ -632,7 +635,7 @@ def get_case_detail(
     suspect_count = db.query(CaseSuspect).filter(CaseSuspect.case_id_fk == case.id).count()
     victim_count = db.query(CaseVictim).filter(CaseVictim.case_id_fk == case.id).count()
     leads_count = db.query(Lead).filter(Lead.case_id_fk == case.id).count()
-    days_open = (datetime.utcnow().date() - case.created_at.date()).days if case.created_at else 0
+    days_open = (datetime.now(UTC).date() - case.created_at.date()).days if case.created_at else 0
 
     stats = CaseStats(
         evidence_collected=evidence_count,
@@ -656,7 +659,6 @@ def get_case_detail(
     )
     timeline = [_timeline_to_out(ev, case.case_id) for ev in events]
 
-    # Audit the view
     try:
         audit.log_event(
             db, user_id=user.id, action="VIEW", module="Case Management",

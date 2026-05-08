@@ -18,8 +18,6 @@ from schemas.all_cases_schema import (
 )
 
 
-# ─── Lookup-code groups ─────────────────────────────────────────────────────
-# If your seed data uses different CaseStatus.code values, edit these tuples.
 ACTIVE_STATUS_CODES  = ("OPEN", "UNDER_INVESTIGATION", "PENDING", "ACTIVE")
 CLOSED_STATUS_CODES  = ("CLOSED", "SOLVED")
 PENDING_STATUS_CODES = ("PENDING",)
@@ -30,15 +28,11 @@ TAB_TO_CODES = {
     "Closed":  CLOSED_STATUS_CODES,
 }
 
-
-# ─── Internal helpers ───────────────────────────────────────────────────────
-
 def _scope_to_user(query, user: User):
     """Investigators see only their cases. Admins see everything."""
     if user.role == "admin":
         return query
     return query.filter(Case.assigned_investigator_id == user.id)
-
 
 def _format_investigator_name(case: Case) -> str:
     """Display string for the 'Investigator' column."""
@@ -48,7 +42,6 @@ def _format_investigator_name(case: Case) -> str:
     rank = (inv.rank or "").strip()
     name = inv.user.username
     return f"{rank}. {name}" if rank else name
-
 
 def _format_location(case: Case) -> str:
     """Best-effort 'Area, City' string."""
@@ -64,7 +57,6 @@ def _format_location(case: Case) -> str:
         return ", ".join(parts)
     return loc.display_address or loc.full_address or "—"
 
-
 def _row_from_case(case: Case) -> AllCasesRow:
     return AllCasesRow(
         id=case.case_id,
@@ -79,7 +71,6 @@ def _row_from_case(case: Case) -> AllCasesRow:
         registered=case.created_at.strftime("%Y-%m-%d") if case.created_at else "",
         last_update=case.updated_at.strftime("%Y-%m-%d") if case.updated_at else "",
     )
-
 
 def _apply_common_joins_and_filters(
     db: Session,
@@ -114,24 +105,20 @@ def _apply_common_joins_and_filters(
     )
     q = _scope_to_user(q, user)
 
-    # Status tab → CaseStatus.code
     if status_tab and status_tab != "all":
         codes = TAB_TO_CODES.get(status_tab)
         if codes:
             q = q.join(CaseStatus, Case.case_status_id == CaseStatus.id)
             q = q.filter(CaseStatus.code.in_(codes))
 
-    # Crime type by label
     if crime_type and crime_type != "All Types":
         q = q.join(CaseType, Case.case_type_id == CaseType.id)
         q = q.filter(CaseType.label == crime_type)
 
-    # Severity by label
     if severity and severity != "All Severities":
         q = q.join(Severity, Case.priority_id == Severity.id)
         q = q.filter(Severity.label == severity)
 
-    # Free-text search
     s = (search or "").strip()
     if s:
         like = f"%{s}%"
@@ -148,9 +135,6 @@ def _apply_common_joins_and_filters(
         )
 
     return q
-
-
-# ─── Public service methods ─────────────────────────────────────────────────
 
 def list_cases(
     db: Session,
@@ -180,10 +164,8 @@ def list_cases(
         inv_user_alias=inv_user,
     )
 
-    # Total — works on SQLite/MySQL/Postgres (unlike distinct(column))
     total = q.distinct().count()
 
-    # Sort
     direction = desc if sort_dir == "desc" else asc
 
     if sort_field == "registered":
@@ -205,7 +187,6 @@ def list_cases(
     else:
         q = q.order_by(direction(Case.created_at), direction(Case.id))
 
-    # Paginate
     page = max(1, page)
     page_size = max(1, min(page_size, 100))
 
@@ -227,7 +208,6 @@ def list_cases(
         severities=_active_severities(db),
     )
 
-    # Audit — never let a logging failure break the response
     try:
         audit.log_event(
             db,
@@ -304,9 +284,6 @@ def get_case_summary(
         db.rollback()
 
     return _row_from_case(case)
-
-
-# ─── Tab counts + filter-option helpers ─────────────────────────────────────
 
 def _compute_tab_counts(
     db: Session,

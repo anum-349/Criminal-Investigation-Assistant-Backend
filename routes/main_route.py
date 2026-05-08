@@ -8,8 +8,6 @@ from dependencies.auth import (
     get_current_admin, get_current_investigator,
 )
 from models import User
-# from models.case import Case   # uncomment when Case CRUD lands
-# from models.notification import Notification
 
 router = APIRouter()
 
@@ -19,8 +17,6 @@ def investigator_dashboard(
     db: Session = Depends(get_db),
 ):
     """Compact dashboard payload — counts the investigator can act on."""
-    # Placeholders until Case/Notification CRUD lands. They keep the response
-    # shape stable so the frontend dashboard layout doesn't change later.
     return {
         "msg":          f"Welcome, {user.username}",
         "user": {
@@ -36,7 +32,6 @@ def investigator_dashboard(
             "this_week_updates":  0,
         },
     }
-
 
 @router.get("/admin")
 def admin_dashboard(

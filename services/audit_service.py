@@ -1,19 +1,14 @@
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 from fastapi import Request
 
 from models import AuditLog
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ════════════════════════════════════════════════════════════════════════════
-
 def _generate_log_id() -> str:
     """Generate a sortable, unique log_id like 'LOG-20260502-A3F7B2'."""
-    timestamp = datetime.utcnow().strftime("%Y%m%d")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d")
     suffix = secrets.token_hex(3).upper()
     return f"LOG-{timestamp}-{suffix}"
 
@@ -77,15 +72,10 @@ def _write(
         ip_address=meta["ip_address"],
         machine=meta["machine"],
         status=status,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
     db.add(log)
     return log
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Authentication events
-# ════════════════════════════════════════════════════════════════════════════
 
 def log_login_success(db: Session, user, request: Optional[Request] = None) -> AuditLog:
     """User logged in successfully."""
@@ -224,11 +214,6 @@ def log_register(db: Session, user, request: Optional[Request] = None) -> AuditL
         status="Success",
         request=request,
     )
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Generic helper — for any future module to reuse
-# ════════════════════════════════════════════════════════════════════════════
 
 def log_event(
     db: Session,

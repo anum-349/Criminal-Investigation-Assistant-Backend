@@ -1,9 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
-
-# ─── Per-category result rows ──────────────────────────────────────────────
-
 class CaseSearchRow(BaseModel):
     """A row in the 'Cases' category."""
     model_config = ConfigDict(from_attributes=True)
@@ -84,8 +81,6 @@ class LocationSearchRow(BaseModel):
     severity:      str
     case_ids:      List[str]
 
-
-# ─── Counts + envelope ─────────────────────────────────────────────────────
 
 class SearchCounts(BaseModel):
     all:       int = 0

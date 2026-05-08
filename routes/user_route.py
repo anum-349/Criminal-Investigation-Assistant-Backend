@@ -15,9 +15,6 @@ from services.user_service import change_password, login_user, logout_user, regi
 
 router = APIRouter()
 
-
-# ─── REGISTER ────────────────────────────────────────────────────────────────
-
 @router.post("/register", response_model=TokenResponse)
 def register(
     user: UserRegister,
@@ -37,9 +34,6 @@ def register(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-
-# ─── LOGIN ───────────────────────────────────────────────────────────────────
-
 @router.post("/login", response_model=TokenResponse)
 def login(
     user: UserLogin,
@@ -57,9 +51,6 @@ def login(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-
-# ─── LOGOUT ──────────────────────────────────────────────────────────────────
-
 @router.post("/logout", response_model=MessageResponse)
 def logout(
     request: Request,
@@ -76,15 +67,9 @@ def logout(
     """
     return logout_user(db, current_user, request=request)
 
-
-# ─── /me ─────────────────────────────────────────────────────────────────────
-
 @router.get("/me", response_model=MeResponse)
 def get_me(current_user: User = Depends(get_current_user)):
-    return current_user   # Pydantic v2 + from_attributes=True handles ORM → schema
-
-
-# ─── PROFILE UPDATES ─────────────────────────────────────────────────────────
+    return current_user 
 
 @router.put("/profile", response_model=UserResponse)
 def complete_profile(
@@ -96,7 +81,6 @@ def complete_profile(
         return update_user_profile(db, current_user.id, data.model_dump(exclude_unset=True))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
 
 @router.put("/investigator/profile", response_model=InvestigatorProfileResponse)
 def complete_investigator_profile(
@@ -115,9 +99,6 @@ def complete_investigator_profile(
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-
-# ─── PASSWORD CHANGE ─────────────────────────────────────────────────────────
 
 @router.post("/change-password", response_model=MessageResponse)
 def change_my_password(

@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -14,7 +14,6 @@ from services import audit_service as audit
 load_dotenv()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ─── Config ──────────────────────────────────────────────────────────────────
 MAX_FAILED_LOGINS = int(os.getenv("MAX_FAILED_LOGINS", "5"))
 LOCKOUT_MINUTES   = int(os.getenv("LOCKOUT_MINUTES",   "15"))
 PASSWORD_MIN_LEN  = 8
@@ -36,11 +35,6 @@ ROLE_PERMISSIONS = {
         "settings.read",
     ],
 }
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Helpers (unchanged from previous version)
-# ════════════════════════════════════════════════════════════════════════════
 
 def _generate_badge_number(db: Session, role: str) -> str:
     last_user = db.query(User).order_by(User.id.desc()).first()
@@ -75,11 +69,6 @@ def _grant_default_permissions(db: Session, user_role: UserRole, role: str) -> N
             user_role_id=user_role.id,
             permission_id=perm.id,
         ))
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# REGISTER
-# ════════════════════════════════════════════════════════════════════════════
 
 def register_user(
     db: Session,
@@ -125,7 +114,6 @@ def register_user(
     db.flush()
     _grant_default_permissions(db, user_role, role)
 
-    # ── Audit: account created ──────────────────────────────────────────
     audit.log_register(db, new_user, request=request)
 
     db.commit()
@@ -140,11 +128,6 @@ def register_user(
         "access_token": token,
         "token_type": "bearer",
     }
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# LOGIN — every outcome is audited
-# ════════════════════════════════════════════════════════════════════════════
 
 def login_user(
     db: Session,
@@ -179,10 +162,10 @@ def login_user(
         raise Exception("Invalid credentials")
 
     # ── Branch 2: account currently locked ──────────────────────────────
-    if db_user.locked_until and db_user.locked_until > datetime.utcnow():
+    if db_user.locked_until and db_user.locked_until > datetime.now(UTC):
         audit.log_login_blocked(db, db_user, request=request)
         db.commit()
-        remaining = int((db_user.locked_until - datetime.utcnow()).total_seconds() / 60) + 1
+        remaining = int((db_user.locked_until - datetime.now(UTC)).total_seconds() / 60) + 1
         raise Exception(f"Account locked. Try again in {remaining} minute(s).")
 
     # ── Branch 3: wrong password ────────────────────────────────────────
@@ -190,7 +173,7 @@ def login_user(
         db_user.failed_login_count = (db_user.failed_login_count or 0) + 1
 
         if db_user.failed_login_count >= MAX_FAILED_LOGINS:
-            db_user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+            db_user.locked_until = datetime.now(UTC) + timedelta(minutes=LOCKOUT_MINUTES)
             audit.log_login_failed(db, identifier=identifier, user=db_user,
                                     request=request, reason="Wrong password (lockout triggered)")
             audit.log_account_locked(db, db_user, db_user.locked_until, request=request)
@@ -221,7 +204,7 @@ def login_user(
     # ── Branch 6: success ───────────────────────────────────────────────
     db_user.failed_login_count = 0
     db_user.locked_until = None
-    db_user.last_login = datetime.utcnow()
+    db_user.last_login = datetime.now(UTC)
     audit.log_login_success(db, db_user, request=request)
     db.commit()
 
@@ -234,11 +217,6 @@ def login_user(
         "badge_number": db_user.badge_number,
         "role": db_user.role,
     }
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# LOGOUT — new function
-# ════════════════════════════════════════════════════════════════════════════
 
 def logout_user(db: Session, user: User, request: Optional[Request] = None):
     """
@@ -253,14 +231,8 @@ def logout_user(db: Session, user: User, request: Optional[Request] = None):
     db.commit()
     return {"message": "Logged out successfully"}
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# PROFILE UPDATES (unchanged)
-# ════════════════════════════════════════════════════════════════════════════
-
 USER_FIELDS = {"email", "contact_info", "address", "picture_url"}
 INVESTIGATOR_FIELDS = {"department", "rank", "shift", "specialization"}
-
 
 def update_user_profile(db: Session, user_id: int, data: dict):
     user = db.query(User).filter(User.id == user_id).first()
@@ -293,11 +265,6 @@ def update_investigator_profile(db: Session, user_id: int, data: dict):
     db.refresh(user)
     db.refresh(inv)
     return {"user": user, "investigator": inv}
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PASSWORD CHANGE (with audit)
-# ════════════════════════════════════════════════════════════════════════════
 
 def change_password(
     db: Session,

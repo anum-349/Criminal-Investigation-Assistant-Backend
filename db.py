@@ -32,18 +32,13 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     # Only run for SQLite — detect by checking the driver class name.
     if dbapi_connection.__class__.__module__.startswith("sqlite3"):
         cursor = dbapi_connection.cursor()
-        # 1. Enforce foreign keys (and therefore our cascade rules).
+        # Enforce foreign keys (and therefore our cascade rules).
         cursor.execute("PRAGMA foreign_keys = ON")
-        # 2. Use Write-Ahead-Logging — better concurrency for the
-        #    "100 investigators viewing leads simultaneously" non-functional
-        #    requirement (R3.2.2.3.6).
         cursor.execute("PRAGMA journal_mode = WAL")
-        # 3. Synchronous=NORMAL is safe with WAL and ~3× faster than FULL.
         cursor.execute("PRAGMA synchronous = NORMAL")
         cursor.close()
 
 
-# 4. Session factory
 SessionLocal = sessionmaker(
     bind=engine,
     autoflush=False,
@@ -53,8 +48,6 @@ SessionLocal = sessionmaker(
 )
 
 
-# 5. FastAPI dependency
-# Use as: `def my_route(db: Session = Depends(get_db)): ...`
 def get_db():
     db: Session = SessionLocal()
     try:
@@ -63,11 +56,6 @@ def get_db():
         db.close()
 
 
-# 6. Context-manager helper for scripts (seed, CLI tools, tests)
-# Example:
-#     from db import session_scope
-#     with session_scope() as db:
-#         db.add(Province(code="PUNJAB", label="Punjab"))
 @contextmanager
 def session_scope():
     db: Session = SessionLocal()
@@ -81,7 +69,6 @@ def session_scope():
         db.close()
 
 
-# 7. Init helper — called once at app startup OR by Alembic migrations
 def init_db():
     """
     Create all tables defined on the Base metadata.

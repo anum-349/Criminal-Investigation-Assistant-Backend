@@ -1,9 +1,6 @@
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
-# ════════════════════════════════════════════════════════════════════════════
-# RESPONSE schemas — what the backend returns
-# ════════════════════════════════════════════════════════════════════════════
+from pydantic import BaseModel, ConfigDict
 
 class TokenResponse(BaseModel):
     """Response from /login and /register — includes JWT + minimal user info.

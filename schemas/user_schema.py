@@ -1,11 +1,5 @@
 from typing import Optional
-from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# REQUEST schemas — what the frontend sends
-# ════════════════════════════════════════════════════════════════════════════
 
 class UserRegister(BaseModel):
     """POST /api/auth/register"""

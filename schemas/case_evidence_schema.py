@@ -1,9 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
-
-# ─── Photo subobject ────────────────────────────────────────────────────────
-
 class EvidencePhotoOut(BaseModel):
     """One photo attached to an evidence row."""
     model_config = ConfigDict(from_attributes=True)
@@ -12,9 +9,6 @@ class EvidencePhotoOut(BaseModel):
     url:       str                # served from the static mount, e.g. /uploads/...
     file_name: Optional[str] = None
     caption:   Optional[str] = None
-
-
-# ─── Single evidence row ────────────────────────────────────────────────────
 
 class CaseEvidenceRow(BaseModel):
     """One row in the Evidences-tab table. Field names match the JSX (id,
@@ -31,9 +25,6 @@ class CaseEvidenceRow(BaseModel):
     fileName:     Optional[str] = None
     fileMime:     Optional[str] = None
 
-
-# ─── List response ──────────────────────────────────────────────────────────
-
 class CaseEvidenceList(BaseModel):
     """Server-side filtered + paginated list returned to the page."""
     items:           List[CaseEvidenceRow]
@@ -43,9 +34,6 @@ class CaseEvidenceList(BaseModel):
     type_options:    List[str]             # for the type column / future dropdown
     status_options:  List[str]             # always ["Analyzed", "Pending Analysis"]
 
-
-# ─── Update body ────────────────────────────────────────────────────────────
-
 class UpdateEvidenceRequest(BaseModel):
     """PATCH body — only fields the user can edit from the Update dialog."""
     type:           Optional[str] = None
@@ -53,9 +41,6 @@ class UpdateEvidenceRequest(BaseModel):
     dateCollected:  Optional[str] = None   # YYYY-MM-DD
     collectedBy:    Optional[str] = None
     status:         Optional[str] = None   # "Analyzed" | "Pending Analysis"
-
-
-# ─── Photo upload ───────────────────────────────────────────────────────────
 
 class PhotoUploadRequest(BaseModel):
     """Photo upload as a base-64 data URL (matches what FileReader produces
@@ -65,13 +50,9 @@ class PhotoUploadRequest(BaseModel):
     fileName:   Optional[str] = None
     caption:    Optional[str] = None
 
-
-# ─── Generic results ────────────────────────────────────────────────────────
-
 class PhotoUploadResult(BaseModel):
     photo:   EvidencePhotoOut
     photos:  List[EvidencePhotoOut]        # full updated list, for convenience
-
 
 class PhotoDeleteResult(BaseModel):
     deleted_id: int

@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import List, Optional, Dict, Tuple
 from collections import Counter
 
@@ -8,12 +7,12 @@ from fastapi import Request
 
 from models import (
     User, Investigator, Person,
-    Case, CaseStatus, CaseType, Severity,
+    Case, CaseType, Severity,
     CaseSuspect, SuspectStatus,
     CaseVictim, VictimStatus,
     CaseWitness, WitnessCredibility,
     Lead, LeadStatus, LeadType,
-    Location, City, Province,
+    Location, City,
 )
 from services import audit_service as audit
 from schemas.search_schema import (
@@ -22,14 +21,7 @@ from schemas.search_schema import (
     SearchCounts, SearchResponse,
 )
 
-
-# Per-category cap. Page-level "5 per page" pagination across all categories
-# means a cap around 50 still gives the user up to 60 result pages worth
-# of breadth — which is plenty for an exploratory search.
 PER_CATEGORY_LIMIT = 50
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 def _scope_cases(query, user: User):
     """Apply ownership scope on the joined Case object."""
@@ -61,8 +53,6 @@ def _format_location_str(case: Case) -> str:
 def _ymd(dt) -> str:
     return dt.strftime("%Y-%m-%d") if dt else ""
 
-
-# ─── Per-category searches ─────────────────────────────────────────────────
 
 def _search_cases(db: Session, *, user: User, q: str) -> List[CaseSearchRow]:
     """Match against case_id / title / fir_number / complainant / location /
@@ -280,9 +270,7 @@ def _search_witnesses(db: Session, *, user: User, q: str) -> List[WitnessSearchR
 
     out: List[WitnessSearchRow] = []
     for w in rows:
-        # `w.credibility` is a relationship to WitnessCredibility (or None).
         cred_label = w.credibility.label if w.credibility else "—"
-        # Anonymous witnesses have name/contact suppressed.
         is_anon = bool(getattr(w, "anonymous", False))
         out.append(
             WitnessSearchRow(
@@ -437,12 +425,9 @@ def _search_locations(db: Session, *, user: User, q: str) -> List[LocationSearch
             )
         )
 
-    # Stable order: most cases first, then most recent.
     out.sort(key=lambda r: (-r.cases, r.last_incident), reverse=False)
     return out[:PER_CATEGORY_LIMIT]
 
-
-# ─── Public entry point ────────────────────────────────────────────────────
 
 def search_all(
     db: Session,
@@ -474,7 +459,6 @@ def search_all(
         counts.witnesses + counts.leads + counts.locations
     )
 
-    # Audit — never let logging failure break the response.
     try:
         audit.log_event(
             db,

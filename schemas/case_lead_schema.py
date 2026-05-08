@@ -1,9 +1,6 @@
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
-
-
-# ─── Suggested-suspect sub-shape (for the detail dialog) ────────────────────
+from pydantic import BaseModel, ConfigDict
 
 class LeadSuspectRef(BaseModel):
     """Minimal info about a suggested suspect; rendered as a small block in
@@ -15,9 +12,6 @@ class LeadSuspectRef(BaseModel):
     name:       Optional[str] = None
     suspectId:  Optional[str] = None
     basis:      Optional[str] = None
-
-
-# ─── A single lead row (table + detail) ─────────────────────────────────────
 
 class LeadRow(BaseModel):
     """One lead. Field names match what CaseLeads.jsx and LeadDetailDialog read."""
@@ -40,14 +34,10 @@ class LeadRow(BaseModel):
     editable:          bool = False           # manual leads are editable; AI ones aren't
     dismissable:       bool = True
 
-
-# ─── List response ──────────────────────────────────────────────────────────
-
 class LeadCounts(BaseModel):
     all:    int = 0
     ai:     int = 0
     manual: int = 0
-
 
 class CaseLeadsList(BaseModel):
     items:           List[LeadRow]
@@ -56,9 +46,6 @@ class CaseLeadsList(BaseModel):
     page_size:       int
     counts:          LeadCounts                # for the source filter pills
     type_options:    List[str]                # active LeadType labels for dropdown
-
-
-# ─── POST — Add Manual Lead ─────────────────────────────────────────────────
 
 class AddManualLeadRequest(BaseModel):
     """Mirrors the buildLead() output in AddLeadDialog."""
@@ -77,14 +64,8 @@ class AddManualLeadRequest(BaseModel):
     confidence:       Optional[float] = None   # investigator-rated, 0-100
     status:           Optional[str] = "New"
 
-
-# ─── PATCH — Update lead status ─────────────────────────────────────────────
-
 class UpdateLeadStatusRequest(BaseModel):
     status: str                                # "New" | "Under Review" | etc.
-
-
-# ─── DELETE result ──────────────────────────────────────────────────────────
 
 class DeleteLeadResult(BaseModel):
     deleted_id: str

@@ -6,16 +6,12 @@ from datetime import datetime
 from typing import List
 from fastapi import Request
 
-from fastapi.staticfiles import StaticFiles
-import os
-
 from db import get_db
-from dependencies.auth import get_current_user
+from dependencies.auth import get_current_investigator, get_current_user
 from models import (
     User,
     Case,
     CaseStatus,
-    CaseType,
     Activity,
     Lead,
     Location,
@@ -25,8 +21,10 @@ from models import (
     CompletenessMissingField,
 )
 from schemas.all_cases_schema import AllCasesResponse, AllCasesRow
-from schemas.case_detail_schema import AddEvidenceRequest, AddResult, AddSuspectRequest, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
+from schemas.case_detail_schema import AddEvidenceRequest, AddSuspectRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
 from schemas.case_evidence_schema import CaseEvidenceList, CaseEvidenceRow, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, UpdateEvidenceRequest
+from schemas.case_timeline_schema import AddTimelineEventRequest, CaseTimelineList, DeleteTimelineEventResult, TimelineEventRow
+from schemas.case_timeline_schema import CaseTimelineList
 from schemas.investigator_dahboard_schema import (
     DashboardStats,
     CaseListItem,
@@ -46,24 +44,14 @@ from services.all_cases_service import get_case_summary, list_cases
 from services.case_detail_service import add_evidence, add_suspect, add_victim, add_witness, get_case_detail
 from services.case_evidence_service import add_photo, delete_photo, get_evidence, list_evidences, update_evidence
 from services.search_service import search_all
-from services.case_lead_service import (
-    list_leads, add_manual_lead, update_lead_status, delete_lead,
- )
-from services.case_suspect_service import (
-        list_suspects, get_suspect, update_suspect,
-)
-
+from services.case_lead_service import list_leads, add_manual_lead, update_lead_status, delete_lead
+from services.case_suspect_service import list_suspects, get_suspect, update_suspect
+from services import case_timeline_service as svc
 
 router = APIRouter()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Status-code groupings. Adjust if your CaseStatus.code values differ.
 ACTIVE_STATUS_CODES = ("OPEN", "UNDER_INVESTIGATION", "PENDING", "ACTIVE")
 CLOSED_STATUS_CODES = ("CLOSED", "SOLVED")
-
 
 def _scope_to_user(query, user: User):
     """
@@ -75,13 +63,11 @@ def _scope_to_user(query, user: User):
         return query
     return query.filter(Case.assigned_investigator_id == user.id)
 
-
 def _format_case_row(case: Case) -> CaseListItem:
     """Build the row the active-cases table expects."""
     crime_type = case.case_type.label if case.case_type else "—"
     status_label = case.case_status.label if case.case_status else "—"
 
-    # Location is a 1:1 child; prefer the area, fall back to display_address
     if case.location:
         if case.location.area:
             location_str = case.location.area
@@ -102,7 +88,6 @@ def _format_case_row(case: Case) -> CaseListItem:
         last_update=last_update,
     )
 
-
 def _format_activity_row(activity: Activity) -> ActivityItem:
     return ActivityItem(
         id=activity.id,
@@ -113,19 +98,9 @@ def _format_activity_row(activity: Activity) -> ActivityItem:
         created_at=activity.created_at,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Existing welcome ping (kept for backwards compatibility)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator")
 def investigator_welcome(user: User = Depends(get_current_user)):
     return {"msg": f"Welcome Investigator {user.username}"}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stats
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/investigator/dashboard/stats", response_model=DashboardStats)
 def get_dashboard_stats(
@@ -197,11 +172,6 @@ def get_dashboard_stats(
         solved_cases=solved,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Active cases table
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator/cases/active", response_model=List[CaseListItem])
 def get_active_cases(
     limit: int = Query(7, ge=1, le=50),
@@ -227,11 +197,6 @@ def get_active_cases(
     cases = q.order_by(desc(Case.updated_at)).limit(limit).all()
     return [_format_case_row(c) for c in cases]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Recent activities
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator/activities", response_model=List[ActivityItem])
 def get_recent_activities(
     limit: int = Query(4, ge=1, le=20),
@@ -247,11 +212,6 @@ def get_recent_activities(
         )
     activities = q.order_by(desc(Activity.created_at)).limit(limit).all()
     return [_format_activity_row(a) for a in activities]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Crime hotspots (map)
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/investigator/hotspots", response_model=List[HotspotItem])
 def get_hotspots(
@@ -312,11 +272,6 @@ def get_hotspots(
         )
     return hotspots
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Combined endpoint — one call for the whole dashboard
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator/dashboard", response_model=DashboardResponse)
 def get_dashboard(
     db: Session = Depends(get_db),
@@ -329,7 +284,6 @@ def get_dashboard(
         activities=get_recent_activities(limit=4, db=db, user=user),
         hotspots=get_hotspots(db=db, user=user),
     )
-
 
 @router.get("/investigator/cases", response_model=AllCasesResponse)
 def get_all_cases(
@@ -371,11 +325,6 @@ def get_all_cases(
         page_size=page_size,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# All Cases — single-case "view" lookup
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator/cases/{case_id}/summary", response_model=AllCasesRow)
 def get_case_row_summary(
     case_id: str,
@@ -408,10 +357,6 @@ def global_search(
     """
     return search_all(db, user=user, q=q, request=request)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — full case detail
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/investigator/cases/{case_id}", response_model=CaseDetailResponse)
 def get_case(
     case_id: str,
@@ -426,13 +371,8 @@ def get_case(
     """
     return get_case_detail(db, user=user, case_id=case_id, request=request)
 
-
-# POST — Add Suspect / Evidence / Victim / Witness
-
-@router.post(
-    "/investigator/cases/{case_id}/suspects",
-    response_model=AddResult, status_code=201,
-)
+@router.post("/investigator/cases/{case_id}/suspects", 
+             response_model=AddTimelineResult, status_code=201)
 def post_suspect(
     case_id: str,
     body: AddSuspectRequest,
@@ -445,11 +385,8 @@ def post_suspect(
         request=request, suspects=body.suspects,
     )
 
-
-@router.post(
-    "/investigator/cases/{case_id}/evidences",
-    response_model=AddResult, status_code=201,
-)
+@router.post("/investigator/cases/{case_id}/evidences", 
+             response_model=AddTimelineResult, status_code=201,)
 def post_evidence(
     case_id: str,
     body: AddEvidenceRequest,
@@ -462,11 +399,8 @@ def post_evidence(
         request=request, evidences=body.evidences,
     )
 
-
-@router.post(
-    "/investigator/cases/{case_id}/victims",
-    response_model=AddResult, status_code=201,
-)
+@router.post("/investigator/cases/{case_id}/victims", 
+             response_model=AddTimelineResult, status_code=201,)
 def post_victim(
     case_id: str,
     body: AddVictimRequest,
@@ -479,11 +413,8 @@ def post_victim(
         request=request, victims=body.victims,
     )
 
-
-@router.post(
-    "/investigator/cases/{case_id}/witnesses",
-    response_model=AddResult, status_code=201,
-)
+@router.post("/investigator/cases/{case_id}/witnesses", 
+             response_model=AddTimelineResult, status_code=201)
 def post_witness(
     case_id: str,
     body: AddWitnessRequest,
@@ -496,15 +427,8 @@ def post_witness(
         request=request, witnesses=body.witnesses,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — list evidences for a case (table)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get(
-    "/investigator/cases/{case_id}/evidences",
-    response_model=CaseEvidenceList,
-)
+@router.get("/investigator/cases/{case_id}/evidences", 
+            response_model=CaseEvidenceList)
 def get_case_evidences(
     case_id: str,
     request: Request,
@@ -522,15 +446,8 @@ def get_case_evidences(
         page=page, page_size=page_size,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — single evidence (used by the details dialog if needed)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get(
-    "/investigator/cases/{case_id}/evidences/{evidence_id}",
-    response_model=CaseEvidenceRow,
-)
+@router.get("/investigator/cases/{case_id}/evidences/{evidence_id}", 
+            response_model=CaseEvidenceRow)
 def get_one_evidence(
     case_id: str,
     evidence_id: str,
@@ -543,15 +460,8 @@ def get_one_evidence(
         evidence_id=evidence_id, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PATCH — update evidence (Update dialog)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.patch(
-    "/investigator/cases/{case_id}/evidences/{evidence_id}",
-    response_model=CaseEvidenceRow,
-)
+@router.patch("/investigator/cases/{case_id}/evidences/{evidence_id}",
+            response_model=CaseEvidenceRow)
 def patch_evidence(
     case_id: str,
     evidence_id: str,
@@ -565,16 +475,8 @@ def patch_evidence(
         evidence_id=evidence_id, body=body, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# POST — add photo (Upload Photo button, base64 dataURL body)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post(
-    "/investigator/cases/{case_id}/evidences/{evidence_id}/photos",
-    response_model=PhotoUploadResult,
-    status_code=201,
-)
+@router.post("/investigator/cases/{case_id}/evidences/{evidence_id}/photos",
+             response_model=PhotoUploadResult, status_code=201)
 def post_photo(
     case_id: str,
     evidence_id: str,
@@ -588,15 +490,9 @@ def post_photo(
         evidence_id=evidence_id, body=body, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DELETE — remove a photo (trash icon on a thumbnail)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.delete(
     "/investigator/cases/{case_id}/evidences/{evidence_id}/photos/{photo_id}",
-    response_model=PhotoDeleteResult,
-)
+    response_model=PhotoDeleteResult)
 def remove_photo(
     case_id: str,
     evidence_id: str,
@@ -610,14 +506,9 @@ def remove_photo(
         evidence_id=evidence_id, photo_id=photo_id, request=request,
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — list leads for a case
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get(
     "/investigator/cases/{case_id}/leads",
-    response_model=CaseLeadsList,
-)
+    response_model=CaseLeadsList,)
 def get_case_leads(
     case_id: str,
     request: Request,
@@ -638,16 +529,9 @@ def get_case_leads(
         page=page, page_size=page_size,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# POST — add manual lead (AddLeadDialog)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post(
     "/investigator/cases/{case_id}/leads",
-    response_model=LeadRow,
-    status_code=201,
-)
+    response_model=LeadRow, status_code=201)
 def post_manual_lead(
     case_id: str,
     body: AddManualLeadRequest,
@@ -659,15 +543,9 @@ def post_manual_lead(
         db, user=user, case_id=case_id, body=body, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PATCH — update lead status (inline <select>)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.patch(
     "/investigator/cases/{case_id}/leads/{lead_id}",
-    response_model=LeadRow,
-)
+    response_model=LeadRow)
 def patch_lead_status(
     case_id: str,
     lead_id: str,
@@ -681,15 +559,9 @@ def patch_lead_status(
         body=body, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DELETE — hard-delete a manual lead (AI leads → 400)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.delete(
     "/investigator/cases/{case_id}/leads/{lead_id}",
-    response_model=DeleteLeadResult,
-)
+    response_model=DeleteLeadResult)
 def remove_lead(
     case_id: str,
     lead_id: str,
@@ -701,14 +573,9 @@ def remove_lead(
         db, user=user, case_id=case_id, lead_id=lead_id, request=request,
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — list suspects for the case (table)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get(
     "/investigator/cases/{case_id}/suspects",
-    response_model=CaseSuspectsList,
-)
+    response_model=CaseSuspectsList,)
 def get_case_suspects(
     case_id: str,
     request: Request,
@@ -726,15 +593,9 @@ def get_case_suspects(
         page=page, page_size=page_size,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GET — single suspect (View Details dialog)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get(
     "/investigator/cases/{case_id}/suspects/{suspect_id}",
-    response_model=SuspectRow,
-)
+    response_model=SuspectRow)
 def get_one_suspect(
     case_id: str,
     suspect_id: str,
@@ -747,15 +608,9 @@ def get_one_suspect(
         suspect_id=suspect_id, request=request,
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PATCH — update suspect (Update dialog)
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.patch(
     "/investigator/cases/{case_id}/suspects/{suspect_id}",
-    response_model=SuspectRow,
-)
+    response_model=SuspectRow)
 def patch_suspect(
     case_id: str,
     suspect_id: str,
@@ -767,4 +622,50 @@ def patch_suspect(
     return update_suspect(
         db, user=user, case_id=case_id, suspect_id=suspect_id,
         body=body, request=request,
+    )
+
+@router.get(
+    "/investigator/cases/{case_id}/timeline",
+    response_model=CaseTimelineList,
+    summary="List every timeline event for a case",
+)
+def list_timeline(
+    case_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+) -> CaseTimelineList:
+    return svc.list_timeline(db, user=user, case_id=case_id, request=request)
+
+
+@router.post(
+    "/investigator/cases/{case_id}/timeline",
+    response_model=TimelineEventRow,
+    status_code=201,
+    summary="Add a manual timeline event",
+)
+def add_manual_event(
+    case_id: str,
+    body: AddTimelineEventRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+) -> TimelineEventRow:
+    return svc.add_manual_event(db, user=user, case_id=case_id, body=body, request=request)
+
+
+@router.delete(
+    "/investigator/cases/{case_id}/timeline/{event_id}",
+    response_model=DeleteTimelineEventResult,
+    summary="Delete a manual timeline event",
+)
+def delete_manual_event(
+    case_id: str,
+    event_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+) -> DeleteTimelineEventResult:
+    return svc.delete_manual_event(
+        db, user=user, case_id=case_id, event_id=event_id, request=request,
     )

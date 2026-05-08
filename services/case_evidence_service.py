@@ -1,41 +1,8 @@
-"""
-services/case_evidence_service.py
-─────────────────────────────────────────────────────────────────────────────
-Powers the case-detail "Evidences" tab (src/pages/investigator/case/CaseEvidence.jsx).
-
-Public functions:
-  • list_evidences()       — table view with filters + pagination
-  • get_evidence()         — single row for the details dialog
-  • update_evidence()      — Update-dialog submit
-  • add_photo()            — Upload-Photo button inside the details dialog
-  • delete_photo()         — trash icon on a thumbnail
-
-Status note
-───────────
-The `Evidence` ORM model does NOT (yet) have a dedicated `status` column.
-The frontend already shows "Analyzed" vs "Pending Analysis", so we DERIVE
-status from a stable signal: an evidence row is "Analyzed" once its
-sha256_hash is set (i.e. forensic chain-of-custody hash has been computed)
-OR if it has any attached photos.
-
-When you decide to promote this to a real column, add to models.py:
-    status = Column(String(40), default="Pending Analysis")
-…then replace `_derive_status` below with a direct read of the column.
-
-Triple-write
-────────────
-Every mutation (PATCH / add photo / delete photo) writes one row each into:
-  • timeline_events  (so the case timeline shows what happened)
-  • activities       (so the dashboard recent feed picks it up)
-  • audit_logs       (R3.2.1.1.5)
-…all inside a single transaction. Failures roll back atomically.
-"""
-
 import os
 import base64
 import secrets
 import re
-from datetime import datetime, date
+from datetime import UTC, datetime
 from typing import List, Optional, Tuple
 
 from sqlalchemy import desc
@@ -43,11 +10,9 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, Request
 
 from models import (
-    User, Investigator,
-    Case,
+    User, Case,
     Evidence, EvidenceType, EvidencePhoto,
-    Activity,
-    Severity,
+    Activity, Severity,
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
@@ -58,22 +23,13 @@ from schemas.case_evidence_schema import (
 )
 
 
-# ─── Config ─────────────────────────────────────────────────────────────────
-
-# Where uploaded photos go on disk. Configure via env so prod/dev can differ.
-# The directory is created on first write.
 UPLOADS_ROOT = os.getenv("UPLOADS_DIR", "uploads")
-# Public URL prefix that maps to UPLOADS_ROOT (set up via app.mount in main.py).
 UPLOADS_URL_PREFIX = os.getenv("UPLOADS_URL_PREFIX", "/uploads")
 MAX_PHOTO_BYTES = int(os.getenv("MAX_PHOTO_BYTES", str(5 * 1024 * 1024)))  # 5 MB
 
-# Status labels match the frontend dropdown values verbatim.
 STATUS_ANALYZED = "Analyzed"
 STATUS_PENDING  = "Pending Analysis"
 STATUS_OPTIONS  = [STATUS_ANALYZED, STATUS_PENDING]
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
     case = (
@@ -194,7 +150,7 @@ def _log_evidence_action(
     audit_target_id: str,
 ):
     """Triple-write helper for every mutation on the Evidence tab."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk=case.id,
         event_id=f"EVT-{int(now.timestamp() * 1000):X}-{secrets.token_hex(2).upper()}",
@@ -221,11 +177,7 @@ def _log_evidence_action(
             request=request,
         )
     except Exception:
-        # Audit failure must never break the user's mutation.
         pass
-
-
-# ─── 1. List ────────────────────────────────────────────────────────────────
 
 def list_evidences(
     db: Session,
@@ -262,22 +214,16 @@ def list_evidences(
             | (Evidence.description.ilike(like))
         )
 
-    # Date filter — exact match on date_collected
     if date_filter:
         try:
             d = datetime.strptime(date_filter, "%Y-%m-%d").date()
             q = q.filter(Evidence.date_collected == d)
         except ValueError:
-            pass    # silently ignore malformed dates
+            pass    
 
-    # Status filter — applied after fetch since it's derived (see _derive_status).
-    # If the user picks Analyzed, prune to rows with hash or photos at the SQL
-    # level so we don't fetch and then drop most rows.
     apply_status_post = False
     sf = (status_filter or "all").lower()
     if sf == "analyzed":
-        # Need EITHER condition true. Postpone to in-memory because a UNION
-        # against the photos relationship is awkward in SQLAlchemy core.
         apply_status_post = True
     elif sf in ("pending", "pending analysis"):
         apply_status_post = True
@@ -297,7 +243,6 @@ def list_evidences(
     end = start + page_size
     page_rows = rows[start:end]
 
-    # Type options come from active EvidenceType rows (used by Update dialog dropdown).
     type_options = [
         r.label for r in
         db.query(EvidenceType)
@@ -306,7 +251,6 @@ def list_evidences(
           .all()
     ]
 
-    # Audit the view — one row per filter+page combination.
     try:
         audit.log_event(
             db, user_id=user.id, action="VIEW", module="Case Management",
@@ -332,8 +276,6 @@ def list_evidences(
     )
 
 
-# ─── 2. Get one ─────────────────────────────────────────────────────────────
-
 def get_evidence(
     db: Session,
     *,
@@ -358,8 +300,6 @@ def get_evidence(
 
     return _row_from_evidence(e)
 
-
-# ─── 3. Update ─────────────────────────────────────────────────────────────
 
 def update_evidence(
     db: Session,
@@ -398,9 +338,6 @@ def update_evidence(
         e.collected_by = body.collectedBy or None
         changes.append(f"collected_by → {body.collectedBy or '—'}")
 
-    # Status: the schema has no real column, but if the user wanted to mark
-    # as Analyzed and we don't have a hash yet, generate one as a marker.
-    # This is a soft promotion until the status column lands.
     if body.status is not None:
         if body.status == STATUS_ANALYZED and not e.sha256_hash and not e.photos:
             # Synthesise a marker hash so _derive_status returns Analyzed
@@ -428,8 +365,6 @@ def update_evidence(
     db.refresh(e)
     return _row_from_evidence(e)
 
-
-# ─── 4. Add photo ──────────────────────────────────────────────────────────
 
 _DATA_URL_RE = re.compile(r"^data:(?P<mime>[\w/+\-.]+);base64,(?P<body>.+)$")
 
@@ -482,8 +417,6 @@ def add_photo(
 
     raw, mime = _decode_data_url(body.dataUrl)
 
-    # Build the on-disk path. Layout:
-    #   {UPLOADS_ROOT}/evidence/{case_id}/{evidence_id}/{random}{ext}
     folder = os.path.join(UPLOADS_ROOT, "evidence", case_id, evidence_id)
     os.makedirs(folder, exist_ok=True)
     ext = _ext_for_mime(mime, body.fileName)
@@ -513,7 +446,6 @@ def add_photo(
         db.commit()
     except HTTPException:
         db.rollback()
-        # also clean up the orphan file
         try: os.remove(abs_path)
         except Exception: pass
         raise
@@ -528,9 +460,6 @@ def add_photo(
         photo=_photo_to_out(photo),
         photos=[_photo_to_out(p) for p in e.photos],
     )
-
-
-# ─── 5. Delete photo ───────────────────────────────────────────────────────
 
 def delete_photo(
     db: Session,
@@ -571,9 +500,6 @@ def delete_photo(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Photo delete failed: {ex}")
 
-    # Best-effort filesystem cleanup. Only attempt if the path is a real
-    # on-disk file under UPLOADS_ROOT — i.e. NOT an HTTP URL, NOT a
-    # public URL prefix string ('/uploads/…'), and the file actually exists.
     if file_path and not file_path.startswith(("http://", "https://")):
         prefix_with_slash = UPLOADS_URL_PREFIX.rstrip("/") + "/"
         looks_like_public_url = (

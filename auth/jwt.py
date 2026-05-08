@@ -15,7 +15,6 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # 24 hours
 
-
 def create_access_token(data: dict) -> str:
     """Encode a JWT with `exp` set to now+24h. Caller passes payload like
     {"id": user.id, "role": user.role}."""

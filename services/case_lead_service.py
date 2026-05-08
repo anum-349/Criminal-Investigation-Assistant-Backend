@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import List, Optional, Tuple
 
 from sqlalchemy import or_, desc
@@ -23,12 +23,6 @@ from schemas.case_lead_schema import (
     DeleteLeadResult,
 )
 
-
-# ─── Lookup-code groups ─────────────────────────────────────────────────────
-# LEAD_STATUSES from the JS constants:
-#   "New", "Under Review", "In Progress", "Actioned", "Dismissed"
-# Mirror those as codes in lkp_lead_statuses (NEW, UNDER_REVIEW, IN_PROGRESS,
-# ACTIONED, DISMISSED).
 STATUS_LABEL_TO_CODE = {
     "New":          "NEW",
     "Under Review": "UNDER_REVIEW",
@@ -39,9 +33,6 @@ STATUS_LABEL_TO_CODE = {
 
 EVENT_SOURCE_AI     = "AI"
 EVENT_SOURCE_MANUAL = "MANUAL"
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
     case = (
@@ -156,7 +147,6 @@ def _resolve_suggested_suspect(
             display_name = person.full_name if person and person.full_name else candidate
             return (row.id, display_name, row.suspect_id)
 
-    # Otherwise treat the whole string as a free-text name (no DB link).
     return (None, candidate, None)
 
 
@@ -170,10 +160,6 @@ def _resolve_similar_case(db: Session, *, case_id_str: Optional[str]) -> Optiona
         .first()
     )
     return row.id if row else None
-
-
-# ─── Description suffix encoder/decoder ─────────────────────────────────────
-# Pack/unpack the optional fields that have no column in the Lead model.
 
 _SUFFIX_MARKER = "\n\n[Lead-extras]"
 _KEY_NAMES = ("Source", "Officer", "Weapon/MO", "Area", "Suspect basis")
@@ -211,14 +197,9 @@ def _decode_extras(description: Optional[str]) -> Tuple[str, dict]:
             extras[k.strip()] = v.strip()
     return (clean.rstrip(), extras)
 
-
-# ─── Row formatter ──────────────────────────────────────────────────────────
-
 def _row_from_lead(lead: Lead) -> LeadRow:
     clean_desc, extras = _decode_extras(lead.description)
 
-    # Source label for the response — AI leads always say "AI Analysis",
-    # manual leads use the user-picked source string from the description suffix.
     if (lead.event_source or "").upper() == EVENT_SOURCE_AI:
         source = "AI Analysis"
     else:
@@ -242,9 +223,6 @@ def _row_from_lead(lead: Lead) -> LeadRow:
             basis=extras.get("Suspect basis"),
         )
     elif extras.get("Suspect basis") or extras.get("Source"):
-        # Free-text suspect name was originally typed but no FK was created.
-        # We don't store the typed name separately, so we leave name=None
-        # and let the basis show up in the dialog.
         if extras.get("Suspect basis"):
             suggested = LeadSuspectRef(name=None, basis=extras.get("Suspect basis"))
 
@@ -264,13 +242,11 @@ def _row_from_lead(lead: Lead) -> LeadRow:
         officerName=officer_name,
         suggestedSuspect=suggested,
         similarCaseId=lead.similar_case.case_id if lead.similar_case else None,
-        generatedAt=lead.generated_at or datetime.utcnow(),
+        generatedAt=lead.generated_at or datetime.now(UTC),
         editable=not is_ai,           # manual leads only
         dismissable=True,
     )
 
-
-# ─── Triple-write helper ────────────────────────────────────────────────────
 
 def _log_lead_action(
     db: Session, *,
@@ -280,7 +256,7 @@ def _log_lead_action(
     activity_type: str = "lead",
 ):
     """Write TimelineEvent + Activity + AuditLog for one lead mutation."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk=case.id,
         event_id=f"EVT-{int(now.timestamp() * 1000):X}-{secrets.token_hex(2).upper()}",
@@ -308,9 +284,6 @@ def _log_lead_action(
         )
     except Exception:
         pass
-
-
-# ─── 1. List ────────────────────────────────────────────────────────────────
 
 def list_leads(
     db: Session,
@@ -344,8 +317,6 @@ def list_leads(
     )
 
     q = base
-
-    # Keyword
     kw = (keyword or "").strip()
     if kw:
         like = f"%{kw}%"
@@ -358,29 +329,24 @@ def list_leads(
             )
         )
 
-    # Type filter
     if lead_type and lead_type.strip():
         type_id = _lead_type_id(db, lead_type.strip())
         if type_id is not None:
             q = q.filter(Lead.type_id == type_id)
         else:
-            # type label not found → no rows
             q = q.filter(Lead.id == -1)
 
-    # Severity filter
     if severity and severity != "all":
         sev_id = _severity_id_by_label(db, severity)
         if sev_id is not None:
             q = q.filter(Lead.severity_id == sev_id)
 
-    # Source filter (AI vs Manual)
     src = (source or "all").lower()
     if src == "ai":
         q = q.filter(Lead.event_source == EVENT_SOURCE_AI)
     elif src == "manual":
         q = q.filter(Lead.event_source == EVENT_SOURCE_MANUAL)
 
-    # Date filter — leads generated on/after the given date
     if date_from:
         try:
             d = datetime.strptime(date_from, "%Y-%m-%d")
@@ -401,7 +367,6 @@ def list_leads(
     )
     items = [_row_from_lead(l) for l in rows]
 
-    # Counts (unfiltered by source — they go into the source-pill badges)
     base_unscoped = base
     counts = LeadCounts(
         all=base_unscoped.count(),
@@ -435,9 +400,6 @@ def list_leads(
         items=items, total=total, page=page, page_size=page_size,
         counts=counts, type_options=type_options,
     )
-
-
-# ─── 2. Add manual lead ─────────────────────────────────────────────────────
 
 def add_manual_lead(
     db: Session,
@@ -508,9 +470,6 @@ def add_manual_lead(
     fresh = _resolve_lead(db, case=case, lead_id=lead.lead_id)  # rehydrate joined rels
     return _row_from_lead(fresh)
 
-
-# ─── 3. Update lead status (inline <select>) ────────────────────────────────
-
 def update_lead_status(
     db: Session,
     *,
@@ -556,8 +515,6 @@ def update_lead_status(
     fresh = _resolve_lead(db, case=case, lead_id=lead.lead_id)
     return _row_from_lead(fresh)
 
-
-# ─── 4. Delete (manual leads only) ──────────────────────────────────────────
 
 def delete_lead(
     db: Session,

@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, List
 
 from sqlalchemy import or_, desc
@@ -7,20 +7,15 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, Request
 
 from models import (
-    User, Investigator, Person,
-    Case,
+    User, Person, Case,
     CaseSuspect, SuspectStatus,
-    Severity,
-    Activity,
+    Severity, Activity,
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
 from schemas.case_suspect_schema import (
     SuspectRow, CaseSuspectsList, UpdateSuspectRequest,
 )
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
     case = (
@@ -105,7 +100,6 @@ def _row_from_suspect(s: CaseSuspect) -> SuspectRow:
         arrested=bool(s.arrested),
         criminalRecord=bool(s.criminal_record),
         dateAdded=_ymd(s.created_at) if hasattr(s, "created_at") and s.created_at else None,
-        # Reserved-for-later fields (no columns yet) — see schema docstring.
         statementDate=None,
         physicalDescription=None,
         knownAffiliations=None,
@@ -122,7 +116,7 @@ def _log_suspect_action(
     audit_target_id: str,
 ):
     """Triple-write helper for one suspect mutation."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk=case.id,
         event_id=f"EVT-{int(now.timestamp() * 1000):X}-{secrets.token_hex(2).upper()}",
@@ -150,9 +144,6 @@ def _log_suspect_action(
     except Exception:
         pass
 
-
-# ─── 1. List ────────────────────────────────────────────────────────────────
-
 def list_suspects(
     db: Session,
     *,
@@ -177,7 +168,6 @@ def list_suspects(
         )
     )
 
-    # Free-text search — id, name, CNIC, reason, alibi
     s = (search or "").strip()
     if s:
         like = f"%{s}%"
@@ -192,14 +182,12 @@ def list_suspects(
             )
         )
 
-    # Status filter — by SuspectStatus.label, case-insensitive partial match
     sf = (status_filter or "all").strip()
     if sf and sf.lower() != "all":
         q = q.outerjoin(SuspectStatus, CaseSuspect.status_id == SuspectStatus.id)
         like_status = f"%{sf}%"
         q = q.filter(SuspectStatus.label.ilike(like_status))
 
-    # Date filter — created_at on the date the suspect was added
     if date_filter:
         try:
             target = datetime.strptime(date_filter, "%Y-%m-%d").date()
@@ -250,8 +238,6 @@ def list_suspects(
     )
 
 
-# ─── 2. Get one (View Details) ──────────────────────────────────────────────
-
 def get_suspect(
     db: Session,
     *,
@@ -276,8 +262,6 @@ def get_suspect(
     return _row_from_suspect(row)
 
 
-# ─── 3. Update ──────────────────────────────────────────────────────────────
-
 def update_suspect(
     db: Session,
     *,
@@ -293,7 +277,6 @@ def update_suspect(
 
     changes: List[str] = []
 
-    # ── Person fields ──────────────────────────────────────────────────
     # Note: CNIC is a natural key. If the user changes it to a CNIC that
     # already belongs to another Person, re-link this CaseSuspect to that
     # row instead of mutating ours (which would clobber unrelated data).
@@ -306,7 +289,6 @@ def update_suspect(
                 .first()
             )
             if existing:
-                # Re-link
                 suspect.person_id = existing.id
                 person = existing
                 changes.append(f"linked to existing Person (cnic={new_cnic})")
@@ -314,7 +296,6 @@ def update_suspect(
                 person.cnic = new_cnic
                 changes.append(f"cnic → {new_cnic}")
 
-    # The remaining person fields update the Person we're now linked to.
     person_field_map = [
         ("name",       "full_name"),
         ("age",        "age"),
@@ -329,8 +310,6 @@ def update_suspect(
             if new_val is None:
                 continue
             current = getattr(person, person_attr)
-            # Treat empty strings as "do not change" so the dialog's blank
-            # fields don't accidentally null-out existing data.
             if new_val == "" and (current is None or current == ""):
                 continue
             if new_val == "":
@@ -366,7 +345,6 @@ def update_suspect(
         suspect.criminal_record = bool(body.criminalRecord)
         changes.append(f"criminalRecord → {body.criminalRecord}")
 
-    # ── Commit (only if something actually changed) ───────────────────
     if changes:
         try:
             _log_suspect_action(
@@ -383,6 +361,5 @@ def update_suspect(
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Update failed: {ex}")
 
-    # Reload joined rels for the response
     fresh = _resolve_suspect(db, case=case, suspect_id=suspect.suspect_id)
     return _row_from_suspect(fresh)
