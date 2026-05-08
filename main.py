@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
 from routes import investigator_route, main_route, user_route
@@ -37,6 +38,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+UPLOADS_DIR = os.getenv("UPLOADS_DIR", "uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 DEFAULT_ORIGINS = [
     "http://localhost:5173",

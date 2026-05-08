@@ -1,0 +1,153 @@
+from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict
+
+
+# ═══ GET — Case detail response ════════════════════════════════════════════
+
+class CaseHeader(BaseModel):
+    """The hero block at the top of the page."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id:           str           # external case_id, e.g. "C-2053"
+    title:        str
+    crime_type:   str
+    status:       str
+    severity:     str
+    investigator: str
+    description:  Optional[str] = None
+
+
+class CaseStats(BaseModel):
+    """The 5 dark-blue stat tiles."""
+    evidence_collected:  int
+    suspects:            int
+    investigation_leads: int
+    victims:             int
+    days_open:           int
+
+
+class TimelineEventOut(BaseModel):
+    """One row in the timeline. Shape mirrors createSystemEvent / createManualEvent
+    in caseEventConstants.js — same keys, lowercase, so the existing CaseTimeline
+    component renders backend events without changes."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id:           str
+    caseId:       str           = Field(alias="case_id")
+    eventSource:  str           = Field(alias="event_source")    # "system" | "manual"
+    eventType:    str           = Field(alias="event_type")
+    title:        str
+    description:  Optional[str] = None
+    officerName:  Optional[str] = Field(default=None, alias="officer_name")
+    severity:     str           = "Normal"
+    location:     Optional[str] = None
+    outcome:      Optional[str] = None
+    date:         str           # YYYY-MM-DD
+    time:         Optional[str] = None
+    createdAt:    Optional[datetime] = Field(default=None, alias="created_at")
+    editable:     bool          = True
+
+
+class CaseDetailResponse(BaseModel):
+    header:    CaseHeader
+    stats:     CaseStats
+    timeline:  List[TimelineEventOut]
+
+
+# ═══ POST — Add Suspect ════════════════════════════════════════════════════
+
+class SuspectInput(BaseModel):
+    """Mirror of one row from the AddSuspectDialog form."""
+    model_config = ConfigDict(extra="ignore")
+
+    suspectId:        Optional[str] = None
+    name:             Optional[str] = None
+    cnic:             Optional[str] = None
+    age:              Optional[int] = None
+    gender:           Optional[str] = None
+    status:           Optional[str] = None      # SuspectStatus.label, e.g. "At Large"
+    relationToCase:   Optional[str] = None
+    reason:           Optional[str] = None
+    alibi:            Optional[str] = None
+    criminalRecord:   Optional[bool] = False
+    arrested:         Optional[bool] = False
+
+
+class AddSuspectRequest(BaseModel):
+    suspects: List[SuspectInput]
+
+
+# ═══ POST — Add Evidence ═══════════════════════════════════════════════════
+
+class EvidenceInput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    evidenceId:    Optional[str] = None
+    type:          str                          # EvidenceType.label
+    description:   Optional[str] = None
+    dateCollected: Optional[str] = None         # YYYY-MM-DD
+    collectedBy:   Optional[str] = None
+    fileName:      Optional[str] = None
+    fileMime:      Optional[str] = None
+
+
+class AddEvidenceRequest(BaseModel):
+    evidences: List[EvidenceInput]
+
+
+# ═══ POST — Add Victim ═════════════════════════════════════════════════════
+
+class VictimInput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    victimId:           Optional[str] = None
+    name:               Optional[str] = None
+    cnic:               Optional[str] = None
+    age:                Optional[int] = None
+    gender:             Optional[str] = None
+    contact:            Optional[str] = None
+    address:            Optional[str] = None
+    occupation:         Optional[str] = None
+    status:             Optional[str] = None      # VictimStatus.label
+    primaryLabel:       Optional[str] = None
+    injuryType:         Optional[str] = None
+    natureOfInjuries:   Optional[str] = None
+    causeOfDeath:       Optional[str] = None
+    statement:          Optional[str] = None
+
+
+class AddVictimRequest(BaseModel):
+    victims: List[VictimInput]
+
+
+# ═══ POST — Add Witness ════════════════════════════════════════════════════
+
+class WitnessInput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    witnessId:        Optional[str] = None
+    name:             Optional[str] = None
+    cnic:             Optional[str] = None
+    age:              Optional[int] = None
+    gender:           Optional[str] = None
+    contact:          Optional[str] = None
+    address:          Optional[str] = None
+    relationToCase:   Optional[str] = None
+    credibility:      Optional[str] = None      # WitnessCredibility.label
+    description:      Optional[str] = None      # statement
+    anonymous:        Optional[bool] = False
+    protection_required: Optional[bool] = Field(default=False, alias="protectionRequired")
+
+
+class AddWitnessRequest(BaseModel):
+    witnesses: List[WitnessInput]
+
+
+# ═══ Generic add-result envelope ═══════════════════════════════════════════
+
+class AddResult(BaseModel):
+    """What every POST returns: the new external IDs + the freshly logged
+    timeline events so the frontend can prepend them without a re-fetch."""
+    created_ids:      List[str]
+    timeline_events:  List[TimelineEventOut]

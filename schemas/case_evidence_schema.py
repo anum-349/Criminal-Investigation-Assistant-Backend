@@ -1,0 +1,78 @@
+from typing import List, Optional
+from pydantic import BaseModel, ConfigDict
+
+
+# ─── Photo subobject ────────────────────────────────────────────────────────
+
+class EvidencePhotoOut(BaseModel):
+    """One photo attached to an evidence row."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id:        int                # the EvidencePhoto.id (used by DELETE)
+    url:       str                # served from the static mount, e.g. /uploads/...
+    file_name: Optional[str] = None
+    caption:   Optional[str] = None
+
+
+# ─── Single evidence row ────────────────────────────────────────────────────
+
+class CaseEvidenceRow(BaseModel):
+    """One row in the Evidences-tab table. Field names match the JSX (id,
+    type, date, description, collectedBy, status, photos)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id:           str                      # external evidence_id, e.g. "EVID-001"
+    type:         str
+    description:  Optional[str] = None
+    date:         str                      # date_collected, YYYY-MM-DD
+    collectedBy:  Optional[str] = None
+    status:       str                      # "Analyzed" | "Pending Analysis"
+    photos:       List[EvidencePhotoOut] = []
+    fileName:     Optional[str] = None
+    fileMime:     Optional[str] = None
+
+
+# ─── List response ──────────────────────────────────────────────────────────
+
+class CaseEvidenceList(BaseModel):
+    """Server-side filtered + paginated list returned to the page."""
+    items:           List[CaseEvidenceRow]
+    total:           int
+    page:            int
+    page_size:       int
+    type_options:    List[str]             # for the type column / future dropdown
+    status_options:  List[str]             # always ["Analyzed", "Pending Analysis"]
+
+
+# ─── Update body ────────────────────────────────────────────────────────────
+
+class UpdateEvidenceRequest(BaseModel):
+    """PATCH body — only fields the user can edit from the Update dialog."""
+    type:           Optional[str] = None
+    description:    Optional[str] = None
+    dateCollected:  Optional[str] = None   # YYYY-MM-DD
+    collectedBy:    Optional[str] = None
+    status:         Optional[str] = None   # "Analyzed" | "Pending Analysis"
+
+
+# ─── Photo upload ───────────────────────────────────────────────────────────
+
+class PhotoUploadRequest(BaseModel):
+    """Photo upload as a base-64 data URL (matches what FileReader produces
+    in the existing CaseEvidence dialog). The service strips the prefix and
+    decodes the body itself."""
+    dataUrl:    str
+    fileName:   Optional[str] = None
+    caption:    Optional[str] = None
+
+
+# ─── Generic results ────────────────────────────────────────────────────────
+
+class PhotoUploadResult(BaseModel):
+    photo:   EvidencePhotoOut
+    photos:  List[EvidencePhotoOut]        # full updated list, for convenience
+
+
+class PhotoDeleteResult(BaseModel):
+    deleted_id: int
+    photos:     List[EvidencePhotoOut]

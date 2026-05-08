@@ -1,8 +1,13 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi_cli.cli import app
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from datetime import datetime
 from typing import List
+from fastapi import Request
+
+from fastapi.staticfiles import StaticFiles
+import os
 
 from db import get_db
 from dependencies.auth import get_current_user
@@ -19,6 +24,9 @@ from models import (
     CompletenessReport,
     CompletenessMissingField,
 )
+from schemas.all_cases_schema import AllCasesResponse, AllCasesRow
+from schemas.case_detail_schema import AddEvidenceRequest, AddResult, AddSuspectRequest, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
+from schemas.case_evidence_schema import CaseEvidenceList, CaseEvidenceRow, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, UpdateEvidenceRequest
 from schemas.investigator_dahboard_schema import (
     DashboardStats,
     CaseListItem,
@@ -26,9 +34,27 @@ from schemas.investigator_dahboard_schema import (
     HotspotItem,
     DashboardResponse,
 )
+from schemas.case_lead_schema import (
+    CaseLeadsList, LeadRow, DeleteLeadResult,
+    AddManualLeadRequest, UpdateLeadStatusRequest,
+)
+from schemas.case_suspect_schema import (
+        CaseSuspectsList, SuspectRow, UpdateSuspectRequest,
+)
+from schemas.search_schema import SearchResponse
+from services.all_cases_service import get_case_summary, list_cases
+from services.case_detail_service import add_evidence, add_suspect, add_victim, add_witness, get_case_detail
+from services.case_evidence_service import add_photo, delete_photo, get_evidence, list_evidences, update_evidence
+from services.search_service import search_all
+from services.case_lead_service import (
+    list_leads, add_manual_lead, update_lead_status, delete_lead,
+ )
+from services.case_suspect_service import (
+        list_suspects, get_suspect, update_suspect,
+)
+
 
 router = APIRouter()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -302,4 +328,443 @@ def get_dashboard(
         active_cases=get_active_cases(limit=7, db=db, user=user),
         activities=get_recent_activities(limit=4, db=db, user=user),
         hotspots=get_hotspots(db=db, user=user),
+    )
+
+
+@router.get("/investigator/cases", response_model=AllCasesResponse)
+def get_all_cases(
+    request: Request,
+    search: str = Query("", description="Free-text search"),
+    status: str = Query(
+        "all",
+        description="Status tab: all | Active | Pending | Closed",
+        pattern="^(all|Active|Pending|Closed)$",
+    ),
+    crime_type: str = Query("All Types"),
+    severity: str = Query("All Severities"),
+    sort_field: str = Query(
+        "registered",
+        pattern="^(title|crimeType|location|investigator|status|registered|lastUpdate)$",
+    ),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Paginated, filtered, sorted list of cases for the All Cases page.
+    Investigators see only cases assigned to them; admins see everything.
+    Every list view writes a VIEW row to audit_logs (R3.2.1.1.5).
+    """
+    return list_cases(
+        db,
+        user=user,
+        request=request,
+        search=search,
+        status_tab=status,
+        crime_type=crime_type,
+        severity=severity,
+        sort_field=sort_field,
+        sort_dir=sort_dir,
+        page=page,
+        page_size=page_size,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# All Cases — single-case "view" lookup
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/investigator/cases/{case_id}/summary", response_model=AllCasesRow)
+def get_case_row_summary(
+    case_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Lightweight 'pre-fetch' for the row when the user clicks View.
+    Writes a VIEW audit row scoped to the specific case.
+    Returns 404 if the case doesn't exist or the user can't see it.
+    """
+    row = get_case_summary(db, user=user, case_id=case_id, request=request)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return row
+
+@router.get("/investigator/search", response_model=SearchResponse)
+def global_search(
+    request: Request,
+    q: str = Query("", description="Free-text search query (empty = recent items)"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Unified search across cases, suspects, victims, witnesses, leads, and
+    locations. Returns up to 50 rows per category. Investigators see only
+    items from cases they're assigned to; admins see everything. Every
+    search writes a SEARCH row to audit_logs (R3.2.1.1.5).
+    """
+    return search_all(db, user=user, q=q, request=request)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — full case detail
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/investigator/cases/{case_id}", response_model=CaseDetailResponse)
+def get_case(
+    case_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Returns the case header, stats, and full timeline. Investigators see
+    only their own cases; admins see everything. 404 if not found.
+    Writes one VIEW audit row.
+    """
+    return get_case_detail(db, user=user, case_id=case_id, request=request)
+
+
+# POST — Add Suspect / Evidence / Victim / Witness
+
+@router.post(
+    "/investigator/cases/{case_id}/suspects",
+    response_model=AddResult, status_code=201,
+)
+def post_suspect(
+    case_id: str,
+    body: AddSuspectRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_suspect(
+        db, user=user, case_id=case_id,
+        request=request, suspects=body.suspects,
+    )
+
+
+@router.post(
+    "/investigator/cases/{case_id}/evidences",
+    response_model=AddResult, status_code=201,
+)
+def post_evidence(
+    case_id: str,
+    body: AddEvidenceRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_evidence(
+        db, user=user, case_id=case_id,
+        request=request, evidences=body.evidences,
+    )
+
+
+@router.post(
+    "/investigator/cases/{case_id}/victims",
+    response_model=AddResult, status_code=201,
+)
+def post_victim(
+    case_id: str,
+    body: AddVictimRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_victim(
+        db, user=user, case_id=case_id,
+        request=request, victims=body.victims,
+    )
+
+
+@router.post(
+    "/investigator/cases/{case_id}/witnesses",
+    response_model=AddResult, status_code=201,
+)
+def post_witness(
+    case_id: str,
+    body: AddWitnessRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_witness(
+        db, user=user, case_id=case_id,
+        request=request, witnesses=body.witnesses,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — list evidences for a case (table)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/investigator/cases/{case_id}/evidences",
+    response_model=CaseEvidenceList,
+)
+def get_case_evidences(
+    case_id: str,
+    request: Request,
+    search: str = Query(""),
+    date: str = Query("", description="YYYY-MM-DD"),
+    status: str = Query("all", pattern="^(all|analyzed|Pending|pending|pending analysis|Analyzed)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return list_evidences(
+        db, user=user, case_id=case_id, request=request,
+        search=search, date_filter=date, status_filter=status,
+        page=page, page_size=page_size,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — single evidence (used by the details dialog if needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/investigator/cases/{case_id}/evidences/{evidence_id}",
+    response_model=CaseEvidenceRow,
+)
+def get_one_evidence(
+    case_id: str,
+    evidence_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return get_evidence(
+        db, user=user, case_id=case_id,
+        evidence_id=evidence_id, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH — update evidence (Update dialog)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.patch(
+    "/investigator/cases/{case_id}/evidences/{evidence_id}",
+    response_model=CaseEvidenceRow,
+)
+def patch_evidence(
+    case_id: str,
+    evidence_id: str,
+    body: UpdateEvidenceRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return update_evidence(
+        db, user=user, case_id=case_id,
+        evidence_id=evidence_id, body=body, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST — add photo (Upload Photo button, base64 dataURL body)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/investigator/cases/{case_id}/evidences/{evidence_id}/photos",
+    response_model=PhotoUploadResult,
+    status_code=201,
+)
+def post_photo(
+    case_id: str,
+    evidence_id: str,
+    body: PhotoUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_photo(
+        db, user=user, case_id=case_id,
+        evidence_id=evidence_id, body=body, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE — remove a photo (trash icon on a thumbnail)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/investigator/cases/{case_id}/evidences/{evidence_id}/photos/{photo_id}",
+    response_model=PhotoDeleteResult,
+)
+def remove_photo(
+    case_id: str,
+    evidence_id: str,
+    photo_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return delete_photo(
+        db, user=user, case_id=case_id,
+        evidence_id=evidence_id, photo_id=photo_id, request=request,
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — list leads for a case
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/investigator/cases/{case_id}/leads",
+    response_model=CaseLeadsList,
+)
+def get_case_leads(
+    case_id: str,
+    request: Request,
+    keyword: str = Query(""),
+    lead_type: str = Query(""),
+    severity: str = Query("all"),
+    source: str = Query("all", pattern="^(all|ai|manual)$"),
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return list_leads(
+        db, user=user, case_id=case_id, request=request,
+        keyword=keyword, lead_type=lead_type, severity=severity,
+        source=source, date_from=date_from,
+        page=page, page_size=page_size,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST — add manual lead (AddLeadDialog)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/investigator/cases/{case_id}/leads",
+    response_model=LeadRow,
+    status_code=201,
+)
+def post_manual_lead(
+    case_id: str,
+    body: AddManualLeadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return add_manual_lead(
+        db, user=user, case_id=case_id, body=body, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH — update lead status (inline <select>)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.patch(
+    "/investigator/cases/{case_id}/leads/{lead_id}",
+    response_model=LeadRow,
+)
+def patch_lead_status(
+    case_id: str,
+    lead_id: str,
+    body: UpdateLeadStatusRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return update_lead_status(
+        db, user=user, case_id=case_id, lead_id=lead_id,
+        body=body, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE — hard-delete a manual lead (AI leads → 400)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/investigator/cases/{case_id}/leads/{lead_id}",
+    response_model=DeleteLeadResult,
+)
+def remove_lead(
+    case_id: str,
+    lead_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return delete_lead(
+        db, user=user, case_id=case_id, lead_id=lead_id, request=request,
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — list suspects for the case (table)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/investigator/cases/{case_id}/suspects",
+    response_model=CaseSuspectsList,
+)
+def get_case_suspects(
+    case_id: str,
+    request: Request,
+    search: str = Query(""),
+    status: str = Query("all"),
+    date: str = Query("", description="YYYY-MM-DD"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return list_suspects(
+        db, user=user, case_id=case_id, request=request,
+        search=search, status_filter=status, date_filter=date,
+        page=page, page_size=page_size,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET — single suspect (View Details dialog)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/investigator/cases/{case_id}/suspects/{suspect_id}",
+    response_model=SuspectRow,
+)
+def get_one_suspect(
+    case_id: str,
+    suspect_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return get_suspect(
+        db, user=user, case_id=case_id,
+        suspect_id=suspect_id, request=request,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH — update suspect (Update dialog)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.patch(
+    "/investigator/cases/{case_id}/suspects/{suspect_id}",
+    response_model=SuspectRow,
+)
+def patch_suspect(
+    case_id: str,
+    suspect_id: str,
+    body: UpdateSuspectRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return update_suspect(
+        db, user=user, case_id=case_id, suspect_id=suspect_id,
+        body=body, request=request,
     )
