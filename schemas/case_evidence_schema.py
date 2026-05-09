@@ -41,6 +41,10 @@ class UpdateEvidenceRequest(BaseModel):
     dateCollected:  Optional[str] = None   # YYYY-MM-DD
     collectedBy:    Optional[str] = None
     status:         Optional[str] = None   # "Analyzed" | "Pending Analysis"
+    
+    fileDataUrl:   Optional[str] = None   # base64 data URL, any MIME
+    fileName:      Optional[str] = None   # original filename, used for extension
+    fileMime:      Optional[str] = None   # MIME hint from the browser
 
 class PhotoUploadRequest(BaseModel):
     """Photo upload as a base-64 data URL (matches what FileReader produces

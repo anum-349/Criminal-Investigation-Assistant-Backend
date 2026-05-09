@@ -83,6 +83,7 @@ class EvidenceInput(BaseModel):
     collectedBy:   Optional[str] = None
     fileName:      Optional[str] = None
     fileMime:      Optional[str] = None
+    photos:         List[str] = []                # list of URLs for image files
 
 class AddEvidenceRequest(BaseModel):
     evidences: List[EvidenceInput]

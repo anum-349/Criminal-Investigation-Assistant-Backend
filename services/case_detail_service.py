@@ -30,16 +30,15 @@ from schemas.case_detail_schema import (
 )
 
 
-def _short_id(prefix: str) -> str:
-    ts = int(datetime.utcnow().timestamp() * 1000)
-    rand = secrets.token_hex(2).upper()
-    return f"{prefix}-{ts:X}-{rand}"
+def _short_id(prefix: str, case_id: str, count: int) -> str:
+    short_case_id = case_id.split("-")[-1]
+    return f"{prefix}-{short_case_id}-T{count + 1:02d}"
 
-def _next_event_id() -> str:    return _short_id("EVT")
-def _next_suspect_id() -> str:  return _short_id("S")
-def _next_victim_id() -> str:   return _short_id("V")
-def _next_witness_id() -> str:  return _short_id("W")
-def _next_evidence_id() -> str: return _short_id("E")
+def _next_event_id(case_id: str, count: int) -> str:    return _short_id("EVN", case_id, count)
+def _next_suspect_id(case_id: str, count: int) -> str:  return _short_id("SUS", case_id, count)
+def _next_victim_id(case_id: str, count: int) -> str:   return _short_id("VIC", case_id, count)
+def _next_witness_id(case_id: str, count: int) -> str:  return _short_id("WIT", case_id, count)
+def _next_evidence_id(case_id: str, count: int) -> str: return _short_id("EVD", case_id, count)
 
 
 def _severity_id_by_label(db: Session, label: Optional[str]) -> Optional[int]:
@@ -195,7 +194,7 @@ def add_suspect(
             row = CaseSuspect(
                 case_id_fk=case.id,
                 person_id=person.id,
-                suspect_id=s.suspectId or _next_suspect_id(),
+                suspect_id=s.suspectId or _next_suspect_id(case.case_id, count=len(case.suspects)),
                 status_id=_suspect_status_id(db, s.status),
                 relation_to_case=s.relationToCase,
                 reason=s.reason,
@@ -262,7 +261,7 @@ def add_evidence(
 
             row = Evidence(
                 case_id_fk=case.id,
-                evidence_id=e.evidenceId or _next_evidence_id(),
+                evidence_id=_next_evidence_id(case.case_id, count=len(case.evidences)),
                 type_id=type_id,
                 description=e.description,
                 file_name=e.fileName,
@@ -360,7 +359,7 @@ def add_victim(
             row = CaseVictim(
                 case_id_fk=case.id,
                 person_id=person.id,
-                victim_id=v.victimId or _next_victim_id(),
+                victim_id=v.victimId or _next_victim_id(case.case_id, count=len(case.victims)),
                 status_id=_victim_status_id(db, v.status),
                 primary_label=v.primaryLabel,
                 injury_type=v.injuryType,
@@ -428,7 +427,7 @@ def add_witness(
             row = CaseWitness(
                 case_id_fk=case.id,
                 person_id=person.id,
-                witness_id=w.witnessId or _next_witness_id(),
+                witness_id=w.witnessId or _next_witness_id(case.case_id, count=len(case.witnesses)),
                 credibility_id=_credibility_id(db, w.credibility),
                 relation_to_case=w.relationToCase,
                 description=w.description,
@@ -492,7 +491,7 @@ def _log_action(
     # 1. TimelineEvent (system-emitted)
     ev = TimelineEvent(
         case_id_fk=case.id,
-        event_id=_next_event_id(),
+        event_id=_next_event_id(case.case_id, count=len(case.timeline_events)),
         event_source="SYSTEM",
         event_type_id=_timeline_event_type_id(db, system_event_code),
         title=title,
