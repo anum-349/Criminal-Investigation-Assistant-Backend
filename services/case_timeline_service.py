@@ -329,7 +329,7 @@ def add_manual_event(
     now = datetime.now(UTC)
     ev = TimelineEvent(
         case_id_fk=case.id,
-        event_id=_next_event_id(case.case_id, count= 0),
+        event_id=_next_event_id(case.case_id, count= len(case.timeline_events)),
         event_source=EVENT_SOURCE_MANUAL,
         event_type_id=type_id,
         title=body.title.strip()[:255],

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
-from routes import investigator_route, main_route, user_route
+from routes import case_routes, investigator_route, main_route, user_route
 
 load_dotenv()
 
@@ -68,6 +68,7 @@ app.add_middleware(
 app.include_router(user_route.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(main_route.router, prefix="/api",      tags=["Dashboard"])
 app.include_router(investigator_route.router, prefix="/api",      tags=["Investigator Dashboard"])
+app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
 
 @app.get("/", tags=["Meta"])
 def root():

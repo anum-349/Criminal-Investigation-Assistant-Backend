@@ -73,11 +73,10 @@ def _format_officer_name(user: User) -> str:
     return f"{rank}{user.username}"
 
 
-def _next_lead_id() -> str:
+def _next_lead_id(case_id: str, count: int) -> str:
     """Match the JS generateLeadId() format: LEAD-{ts}-{rand}."""
-    ts = int(datetime.utcnow().timestamp() * 1000)
-    return f"LEAD-{ts:X}-{secrets.token_hex(2).upper()}"
-
+    short_case_id = case_id.split("-")[-1]
+    return f"LD-{short_case_id}-T{count + 1:02d}"
 
 def _lead_type_id(db: Session, label: Optional[str]) -> Optional[int]:
     if not label:
@@ -435,7 +434,7 @@ def add_manual_lead(
 
     lead = Lead(
         case_id_fk=case.id,
-        lead_id=_next_lead_id(),
+        lead_id=_next_lead_id(case.case_id, count=len(case.leads)),
         event_source=EVENT_SOURCE_MANUAL,
         type_id=type_id,
         status_id=_lead_status_id_by_label(db, body.status or "New"),

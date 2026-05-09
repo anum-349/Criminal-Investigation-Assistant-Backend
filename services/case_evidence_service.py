@@ -196,6 +196,7 @@ def list_evidences(
 
     q = (
         db.query(Evidence)
+        .outerjoin(EvidenceType, Evidence.type_id == EvidenceType.id)
         .filter(Evidence.case_id_fk == case.id)
         .options(
             joinedload(Evidence.type),
@@ -207,11 +208,11 @@ def list_evidences(
     s = (search or "").strip()
     if s:
         like = f"%{s}%"
-        q = q.outerjoin(Evidence.type).filter(
-            (Evidence.evidence_id.ilike(like))
-            | (Evidence.collected_by.ilike(like))
-            | (EvidenceType.label.ilike(like))
-            | (Evidence.description.ilike(like))
+        q = q.filter(
+        (Evidence.evidence_id.ilike(like))
+        | (Evidence.collected_by.ilike(like))
+        | (EvidenceType.label.ilike(like))
+        | (Evidence.description.ilike(like))
         )
 
     if date_filter:
@@ -220,21 +221,13 @@ def list_evidences(
             q = q.filter(Evidence.date_collected == d)
         except ValueError:
             pass    
+    
+    tf = (status_filter or "all").strip().lower()
 
-    apply_status_post = False
-    sf = (status_filter or "all").lower()
-    if sf == "analyzed":
-        apply_status_post = True
-    elif sf in ("pending", "pending analysis"):
-        apply_status_post = True
+    if tf != "all":
+        q = q.filter(EvidenceType.code == tf.upper())
 
     rows = q.order_by(desc(Evidence.created_at)).distinct().all()
-
-    if apply_status_post:
-        if sf == "analyzed":
-            rows = [r for r in rows if _derive_status(r) == STATUS_ANALYZED]
-        else:
-            rows = [r for r in rows if _derive_status(r) == STATUS_PENDING]
 
     total = len(rows)
     page = max(1, page)

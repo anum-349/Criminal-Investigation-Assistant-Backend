@@ -434,7 +434,7 @@ def get_case_evidences(
     request: Request,
     search: str = Query(""),
     date: str = Query("", description="YYYY-MM-DD"),
-    status: str = Query("all", pattern="^(all|analyzed|Pending|pending|pending analysis|Analyzed)$"),
+    status: str = Query("all", pattern="^(all|CCTV|PHOTO|FINGERPRINT|DNA|WEAPON|DOCUMENT|DIGITAL|STATEMENT|MEDICAL|FORENSIC|PHYSICAL|OTHER)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(5, ge=1, le=100),
     db: Session = Depends(get_db),
