@@ -2,11 +2,12 @@ from datetime import UTC, datetime, date
 from typing import List, Optional
 import secrets
 
-from sqlalchemy import desc
+from sqlalchemy import case, desc
 from sqlalchemy.orm import Session, joinedload
 from fastapi import Request, HTTPException
 
 import os                                                        
+import db
 from models import EvidencePhoto                                  
 from services.case_evidence_service import (                      
     _decode_data_url, _ext_for_mime,                              
@@ -28,6 +29,7 @@ from schemas.case_detail_schema import (
     TimelineEventOut, AddTimelineResult,
     SuspectInput, EvidenceInput, VictimInput, WitnessInput,
 )
+from services.service_helper import _resolve_person, _resolve_case, _format_officer_name, _ymd
 
 
 def _short_id(prefix: str, case_id: str, count: int) -> str:
@@ -103,77 +105,6 @@ def _timeline_event_type_id(db: Session, code: str) -> Optional[int]:
     row = db.query(TimelineEventType).filter(TimelineEventType.code == code).first()
     return row.id if row else None
 
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    """Get the case and enforce ownership. Raises 404 / 403."""
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this case")
-    return case
-
-
-def _resolve_person(
-    db: Session,
-    *,
-    name: Optional[str],
-    cnic: Optional[str],
-    age: Optional[int] = None,
-    gender: Optional[str] = None,
-    contact: Optional[str] = None,
-    address: Optional[str] = None,
-) -> Person:
-    """
-    Find an existing Person by CNIC, otherwise create one. CNIC is the
-    natural key (it's unique on the table), so we never duplicate someone
-    just because they're added to a second case.
-    """
-    if cnic:
-        existing = db.query(Person).filter(Person.cnic == cnic).first()
-        if existing:
-            # Update fields that the new entry has and the old row doesn't.
-            if name and not existing.full_name:    existing.full_name = name
-            if age and not existing.age:           existing.age = age
-            if gender and not existing.gender:     existing.gender = gender
-            if contact and not existing.contact:   existing.contact = contact
-            if address and not existing.address:   existing.address = address
-            return existing
-
-    person = Person(
-        full_name=name or None,
-        cnic=cnic or None,
-        age=age,
-        gender=gender,
-        contact=contact,
-        address=address,
-        is_unknown=not bool(name),
-    )
-    db.add(person)
-    db.flush()      # we need person.id immediately
-    return person
-
-
-def _format_officer_name(user: User) -> str:
-    """Used by every TimelineEvent we create."""
-    rank = ""
-    if user.investigator and user.investigator.rank:
-        rank = f"{user.investigator.rank}. "
-    return f"{rank}{user.username}"
-
-
-def _ymd(d) -> str:
-    if isinstance(d, datetime):
-        return d.strftime("%Y-%m-%d")
-    if isinstance(d, date):
-        return d.strftime("%Y-%m-%d")
-    return ""
-
-
 def add_suspect(
     db: Session,
     *,
@@ -246,7 +177,7 @@ def add_evidence(
 
     created_ids: List[str] = []
     timeline_out: List[TimelineEventOut] = []
-    written_files: List[str] = []      # paths to clean up on rollback
+    written_files: List[str] = []      
 
     try:
         for e in evidences:
@@ -259,9 +190,23 @@ def add_evidence(
                 except ValueError:
                     collected_at = None
 
+            latest = (
+                db.query(Evidence)
+                .filter(Evidence.case_id_fk == case.id)
+                .order_by(Evidence.id.desc())
+                .first()
+            )
+
+            if latest:
+                last_num = int(latest.evidence_id.split("T")[-1])
+            else:
+                last_num = 0
+
+            next_num = last_num + 1
+
             row = Evidence(
                 case_id_fk=case.id,
-                evidence_id=_next_evidence_id(case.case_id, count=len(case.evidences)),
+                evidence_id=_next_evidence_id(case.case_id, count=next_num),
                 type_id=type_id,
                 description=e.description,
                 file_name=e.fileName,
@@ -273,7 +218,6 @@ def add_evidence(
             db.flush()
             created_ids.append(row.evidence_id)
 
-            # ── Photos for this row ─────────────────────────────────────
             for ph in (e.photos or []):
                 if not ph.dataUrl:
                     continue
@@ -297,7 +241,6 @@ def add_evidence(
                     file_size=len(raw),
                 ))
 
-            # ── Triple-write for this evidence row ──────────────────────
             label = e.type or "Evidence"
             photo_note = ""
             if e.photos:
@@ -319,7 +262,7 @@ def add_evidence(
         db.commit()
     except HTTPException:
         db.rollback()
-        # delete any files we wrote before the failure
+
         for p in written_files:
             try: os.remove(p)
             except Exception: pass
@@ -356,10 +299,24 @@ def add_victim(
             if v.occupation and not person.occupation:
                 person.occupation = v.occupation
 
+            latest = (
+                db.query(CaseVictim)
+                .filter(CaseVictim.case_id_fk == case.id)
+                .order_by(CaseVictim.id.desc())
+                .first()
+            )
+
+            if latest:
+                last_num = int(latest.victim_id.split("-")[-1])
+            else:
+                last_num = 0
+
+            next_num = last_num + 1
+
             row = CaseVictim(
                 case_id_fk=case.id,
                 person_id=person.id,
-                victim_id=v.victimId or _next_victim_id(case.case_id, count=len(case.victims)),
+                victim_id=_next_victim_id(case.case_id, count=next_num),
                 status_id=_victim_status_id(db, v.status),
                 primary_label=v.primaryLabel,
                 injury_type=v.injuryType,
@@ -424,10 +381,24 @@ def add_witness(
                 address=None if w.anonymous else w.address,
             )
 
+            latest = (
+                db.query(CaseWitness)
+                .filter(CaseWitness.case_id_fk == case.id)
+                .order_by(CaseWitness.id.desc())
+                .first()
+            )
+
+            if latest:
+                last_num = int(latest.witness_id.split("T")[-1])
+            else:
+                last_num = 0
+
+            next_num = last_num + 1
+
             row = CaseWitness(
                 case_id_fk=case.id,
                 person_id=person.id,
-                witness_id=w.witnessId or _next_witness_id(case.case_id, count=len(case.witnesses)),
+                witness_id=w.witnessId or _next_witness_id(case.case_id, count=next_num),
                 credibility_id=_credibility_id(db, w.credibility),
                 relation_to_case=w.relationToCase,
                 description=w.description,
@@ -488,7 +459,6 @@ def _log_action(
     now = datetime.utcnow()
     officer = _format_officer_name(user)
 
-    # 1. TimelineEvent (system-emitted)
     ev = TimelineEvent(
         case_id_fk=case.id,
         event_id=_next_event_id(case.case_id, count=len(case.timeline_events)),
@@ -505,7 +475,6 @@ def _log_action(
     )
     db.add(ev)
 
-    # 2. Activity row — type maps to the dashboard's left-border colour.
     activity_type = {
         "SUSPECT_ADDED":   "investigation",
         "EVIDENCE_ADDED":  "investigation",
@@ -524,7 +493,6 @@ def _log_action(
         created_at=now,
     ))
 
-    # 3. AuditLog
     try:
         audit.log_event(
             db,
@@ -537,9 +505,6 @@ def _log_action(
             request=request,
         )
     except Exception:
-        # Audit failure must never break the user's mutation. The transaction
-        # is still consistent — the caller's commit() / rollback() decides
-        # whether the rest goes through.
         pass
 
     db.flush()    # need ev.id committed-in-session for the response
@@ -551,19 +516,13 @@ def _timeline_to_out(ev: "TimelineEvent", case_id: str) -> "TimelineEventOut":
     is_system = (ev.event_source or "").upper() == "SYSTEM"
     is_ai = (ev.event_source or "").upper() == "AI"
 
-    # event_type display:
-    # - System events: come from a lkp_timeline_event_types row.
-    # - Manual events: the user picked a MANUAL_EVENT_TYPES label which we
-    #   stored on a lkp row too (see _resolve_manual_event_type_id below).
     if ev.event_type and ev.event_type.label:
         event_type_label = ev.event_type.label
     else:
-        # Fallback for legacy rows
         event_type_label = "Manual Entry" if not is_system else (ev.event_source or "")
 
     follow_up_str = None
     if ev.follow_up_date:
-        # Stored as a date object; serialize to YYYY-MM-DD for the JSON wire
         try:
             follow_up_str = ev.follow_up_date.strftime("%Y-%m-%d")
         except Exception:
@@ -584,7 +543,6 @@ def _timeline_to_out(ev: "TimelineEvent", case_id: str) -> "TimelineEventOut":
         time=ev.event_time,
         created_at=ev.created_at,
         editable=bool(ev.editable),
-        # New fields
         attachment_note=ev.attachment_note,
         follow_up_required=bool(ev.follow_up_required),
         follow_up_date=follow_up_str,
@@ -599,7 +557,6 @@ def get_case_detail(
 ) -> CaseDetailResponse:
     case = _resolve_case(db, user=user, case_id=case_id)
 
-    # Eager-load everything the response needs so we don't N+1.
     case = (
         db.query(Case)
         .filter(Case.id == case.id)
@@ -612,7 +569,6 @@ def get_case_detail(
         .first()
     )
 
-    # Investigator name
     inv_name = "—"
     if case.assigned_to and case.assigned_to.user:
         rank = (case.assigned_to.rank or "").strip()
@@ -644,8 +600,6 @@ def get_case_detail(
         days_open=max(0, days_open),
     )
 
-    # Timeline (newest first, all of it — frontend's timeline component
-    # paginates client-side already)
     events = (
         db.query(TimelineEvent)
         .filter(TimelineEvent.case_id_fk == case.id)

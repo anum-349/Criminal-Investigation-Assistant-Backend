@@ -45,7 +45,7 @@ USERS = [
         # ── 2. Investigator user ────────────────────────────────────────────
         "username":      "wajdan.mustafa",
         "email":         "wajdan.mustafa@cia.gov.pk",
-        "password":      "Investigator@123",
+        "password":      "Wajdan@123",
         "role":          "investigator",
         "badge_number":  "INV/CIA-0001",
         "contact_info":  "+92-300-4445566",

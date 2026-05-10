@@ -22,6 +22,7 @@ from schemas.case_lead_schema import (
     AddManualLeadRequest, UpdateLeadStatusRequest,
     DeleteLeadResult,
 )
+from services.service_helper import _format_officer_name, _resolve_case
 
 STATUS_LABEL_TO_CODE = {
     "New":          "NEW",
@@ -33,19 +34,6 @@ STATUS_LABEL_TO_CODE = {
 
 EVENT_SOURCE_AI     = "AI"
 EVENT_SOURCE_MANUAL = "MANUAL"
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this case")
-    return case
-
 
 def _resolve_lead(db: Session, *, case: Case, lead_id: str) -> Lead:
     row = (
@@ -65,12 +53,6 @@ def _resolve_lead(db: Session, *, case: Case, lead_id: str) -> Lead:
         raise HTTPException(status_code=404, detail=f"Lead '{lead_id}' not found")
     return row
 
-
-def _format_officer_name(user: User) -> str:
-    rank = ""
-    if user.investigator and user.investigator.rank:
-        rank = f"{user.investigator.rank}. "
-    return f"{rank}{user.username}"
 
 
 def _next_lead_id(case_id: str, count: int) -> str:

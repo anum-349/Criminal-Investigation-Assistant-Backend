@@ -8,3 +8,7 @@
 *.env
 **/sqlite_data/**/*
 *.log
+
+uploads/
+
+alembic/versions/__pycache__/

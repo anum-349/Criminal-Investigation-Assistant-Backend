@@ -1,14 +1,16 @@
+import base64
 import os
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Optional
+import secrets
+from typing import Dict, Optional
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from auth.jwt import create_access_token
-from models import User, UserRole, UserRolePermission, Permission, Investigator, Admin
+from models import User, UserPreference, UserRole, UserRolePermission, Permission, Investigator, Admin
 from services import audit_service as audit
 
 load_dotenv()
@@ -17,6 +19,38 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 MAX_FAILED_LOGINS = int(os.getenv("MAX_FAILED_LOGINS", "5"))
 LOCKOUT_MINUTES   = int(os.getenv("LOCKOUT_MINUTES",   "15"))
 PASSWORD_MIN_LEN  = 8
+
+UPLOADS_ROOT       = os.getenv("UPLOADS_DIR", "uploads")
+UPLOADS_URL_PREFIX = os.getenv("UPLOADS_URL_PREFIX", "/uploads")
+MAX_PHOTO_BYTES    = int(os.getenv("MAX_PHOTO_BYTES", str(5 * 1024 * 1024)))  # 5 MB
+
+_DATA_URL_RE = re.compile(
+    r"^data:(?P<mime>[\w/+\-.]+);base64,(?P<body>.+)$", re.DOTALL
+)
+_MIME_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg":  ".jpg",
+    "image/png":  ".png",
+    "image/webp": ".webp",
+}
+
+PREF_KEYS = {
+    "email_notifications",
+    "case_update_alerts",
+    "ai_lead_notifications",
+    "sound_alerts",
+    "compact_view",
+    "auto_save_drafts",
+}
+
+DEFAULTS = {
+    "email_notifications":    True,
+    "case_update_alerts":     True,
+    "ai_lead_notifications":  True,
+    "sound_alerts":           False,
+    "compact_view":           False,
+    "auto_save_drafts":       True,
+}
 
 ROLE_PERMISSIONS = {
     "admin": "*",
@@ -69,6 +103,64 @@ def _grant_default_permissions(db: Session, user_role: UserRole, role: str) -> N
             user_role_id=user_role.id,
             permission_id=perm.id,
         ))
+
+
+
+def _decode_profile_image(data_url: str):
+    if not data_url:
+        raise HTTPException(status_code=400, detail="Empty image payload")
+    m = _DATA_URL_RE.match(data_url)
+    if not m:
+        raise HTTPException(status_code=400, detail="Must be a base64 data URL")
+    mime = m.group("mime")
+    if not mime.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"Expected image, got: {mime}")
+    try:
+        raw = base64.b64decode(m.group("body"), validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 body")
+    if len(raw) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 5 MB limit")
+    return raw, mime
+
+
+def upload_profile_picture(db: Session, user_id: int, data_url: str) -> str:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    raw, mime = _decode_profile_image(data_url)
+
+    # Delete old picture from disk
+    if user.picture_url:
+        try:
+            old_url = user.picture_url  # e.g. "/uploads/profile_pictures/42/abc123.jpg"
+            prefix  = UPLOADS_URL_PREFIX.rstrip("/")  # e.g. "/uploads"
+
+            if old_url.startswith(prefix):
+                rel      = old_url[len(prefix):].lstrip("/")   # "profile_pictures/42/abc123.jpg"
+                old_path = os.path.join(UPLOADS_ROOT, rel)     # "uploads/profile_pictures/42/abc123.jpg"
+                if os.path.isfile(old_path):
+                    os.remove(old_path)
+        except Exception:
+            pass  
+
+    folder = os.path.join(UPLOADS_ROOT, "profile_pictures", str(user_id))
+    os.makedirs(folder, exist_ok=True)
+
+    ext      = _MIME_TO_EXT.get(mime, ".jpg")
+    fname    = f"{secrets.token_hex(8)}{ext}"
+    abs_path = os.path.join(folder, fname)
+    with open(abs_path, "wb") as f:
+        f.write(raw)
+
+    rel_path    = os.path.relpath(abs_path, UPLOADS_ROOT).replace(os.sep, "/")
+    picture_url = f"{UPLOADS_URL_PREFIX.rstrip('/')}/{rel_path}"
+
+    user.picture_url = picture_url
+    db.commit()
+    db.refresh(user)
+    return picture_url
 
 def register_user(
     db: Session,
@@ -151,24 +243,18 @@ def login_user(
           .filter((User.username == identifier) | (User.badge_number == identifier))
           .first()
     )
-
-    # ── Branch 1: identifier not found ──────────────────────────────────
-    # Don't reveal which side is wrong (timing-attack-resistant), but DO
-    # log the attempt so we can spot username enumeration.
     if not db_user:
         audit.log_login_failed(db, identifier=identifier, user=None,
                                 request=request, reason="Identifier not found")
         db.commit()
         raise Exception("Invalid credentials")
 
-    # ── Branch 2: account currently locked ──────────────────────────────
     if db_user.locked_until and db_user.locked_until > datetime.now(UTC):
         audit.log_login_blocked(db, db_user, request=request)
         db.commit()
         remaining = int((db_user.locked_until - datetime.now(UTC)).total_seconds() / 60) + 1
         raise Exception(f"Account locked. Try again in {remaining} minute(s).")
 
-    # ── Branch 3: wrong password ────────────────────────────────────────
     if not pwd_context.verify(password, db_user.password):
         db_user.failed_login_count = (db_user.failed_login_count or 0) + 1
 
@@ -187,21 +273,18 @@ def login_user(
         db.commit()
         raise Exception("Invalid credentials")
 
-    # ── Branch 4: account not active (suspended/disabled) ───────────────
     if db_user.status != "active":
         audit.log_login_failed(db, identifier=identifier, user=db_user,
                                 request=request, reason=f"Account status: {db_user.status}")
         db.commit()
         raise Exception(f"Account is {db_user.status}. Contact administrator.")
 
-    # ── Branch 5: admin secret code missing/wrong ───────────────────────
     if db_user.role == "admin" and secret_code != os.getenv("ADMIN_SECRET_CODE"):
         audit.log_login_failed(db, identifier=identifier, user=db_user,
                                 request=request, reason="Invalid admin secret code")
         db.commit()
         raise Exception("Invalid admin secret code")
 
-    # ── Branch 6: success ───────────────────────────────────────────────
     db_user.failed_login_count = 0
     db_user.locked_until = None
     db_user.last_login = datetime.now(UTC)
@@ -274,8 +357,6 @@ def change_password(
     request: Optional[Request] = None,
 ):
     if not pwd_context.verify(current_password, user.password):
-        # Don't audit — could be honest typo. If we DID want to audit,
-        # we'd add a PASSWORD_CHANGE_FAILED action code.
         raise Exception("Current password is incorrect")
 
     _validate_password(new_password)
@@ -284,3 +365,41 @@ def change_password(
     audit.log_password_changed(db, user, request=request)
     db.commit()
     return {"message": "Password changed successfully"}
+
+def fetch_investigator_profile(db: Session, user_id: int):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise Exception("User not found")
+    inv = db.query(Investigator).filter(Investigator.id == user_id).first()
+    if not inv:
+        raise Exception("Investigator profile not found")
+    return {"user": user, "investigator": inv}
+
+def get_preferences(db: Session, user_id: int) -> Dict[str, bool]:
+    rows = (
+        db.query(UserPreference)
+        .filter(UserPreference.user_id == user_id)
+        .all()
+    )
+    saved = {r.pref_key: r.pref_value == "true" for r in rows}
+    return {**DEFAULTS, **saved}
+
+def save_preferences(db: Session, user_id: int, prefs: Dict[str, bool]) -> Dict[str, bool]:
+    for key, value in prefs.items():
+        if key not in PREF_KEYS:
+            continue  
+        row = (
+            db.query(UserPreference)
+            .filter(UserPreference.user_id == user_id, UserPreference.pref_key == key)
+            .first()
+        )
+        if row:
+            row.pref_value = "true" if value else "false"
+        else:
+            db.add(UserPreference(
+                user_id=user_id,
+                pref_key=key,
+                pref_value="true" if value else "false",
+            ))
+    db.commit()
+    return get_preferences(db, user_id)

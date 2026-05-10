@@ -1,35 +1,3 @@
-"""
-services/case_timeline_service.py
-─────────────────────────────────────────────────────────────────────────────
-Powers the case-detail "Timeline" tab (src/pages/investigator/case/[id]/CaseTimeline.jsx).
-
-Public functions:
-  • list_timeline()         — GET (full timeline + counts)
-  • add_manual_event()      — POST (one manual event)
-  • delete_manual_event()   — DELETE (manual events only)
-
-Auto-logged events (SYSTEM / AI)
-────────────────────────────────
-Auto-logged events are NOT created here. They are emitted by the triple-write
-helpers in:
-  • services/case_detail_service.py     (suspects, victims, witnesses, evidences)
-  • services/case_evidence_service.py   (photo upload/delete, evidence updates)
-  • services/case_suspect_service.py    (suspect updates)
-  • services/case_lead_service.py       (manual & AI leads, lead status changes)
-
-This service only needs to:
-  - LIST them (alongside manual events) so the Timeline tab can render both
-  - NEVER let the user delete them (editable=false enforced server-side)
-
-Manual events
-─────────────
-Created here from AddTimelineDialog. We still emit ONE row per call:
-  • timeline_events  (the row itself, event_source="MANUAL", editable=True)
-  • activities       (so the dashboard recent feed picks it up)
-  • audit_logs       (R3.2.1.1.5)
-…all in a single transaction.
-"""
-
 import secrets
 from datetime import UTC, datetime, date
 from typing import Optional
@@ -50,17 +18,12 @@ from schemas.case_timeline_schema import (
     TimelineEventRow, TimelineCounts, CaseTimelineList,
     AddTimelineEventRequest, DeleteTimelineEventResult,
 )
-
-
-# ─── Constants ──────────────────────────────────────────────────────────────
+from services.service_helper import _format_officer_name, _parse_ymd, _resolve_case, _ymd
 
 EVENT_SOURCE_SYSTEM = "SYSTEM"
 EVENT_SOURCE_MANUAL = "MANUAL"
 EVENT_SOURCE_AI     = "AI"
 
-# Mapping of MANUAL_EVENT_TYPES (frontend labels) → suggested code values for
-# the lkp_timeline_event_types row (in case the row has to be auto-created).
-# Codes use SCREAMING_SNAKE_CASE to match the existing system codes.
 MANUAL_LABEL_TO_CODE = {
     "Field Visit":         "FIELD_VISIT",
     "Witness Interview":   "WITNESS_INTERVIEW",
@@ -76,7 +39,6 @@ MANUAL_LABEL_TO_CODE = {
     "Other":               "OTHER",
 }
 
-# Activity row colour mapping for manual events.
 MANUAL_TYPE_TO_ACTIVITY = {
     "Field Visit":         "investigation",
     "Witness Interview":   "investigation",
@@ -92,22 +54,6 @@ MANUAL_TYPE_TO_ACTIVITY = {
     "Other":               "update",
 }
 
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this case")
-    return case
-
-
 def _resolve_event(db: Session, *, case: Case, event_id: str) -> TimelineEvent:
     ev = (
         db.query(TimelineEvent)
@@ -121,13 +67,6 @@ def _resolve_event(db: Session, *, case: Case, event_id: str) -> TimelineEvent:
     if not ev:
         raise HTTPException(status_code=404, detail=f"Timeline event '{event_id}' not found")
     return ev
-
-
-def _format_officer_name(user: User) -> str:
-    rank = ""
-    if user.investigator and user.investigator.rank:
-        rank = f"{user.investigator.rank}. "
-    return f"{rank}{user.username}"
 
 
 def _next_event_id(case_id: str, count: int) -> str:
@@ -155,7 +94,6 @@ def _get_or_create_manual_event_type(db: Session, label: str) -> int:
 
     code = MANUAL_LABEL_TO_CODE.get(label, label.upper().replace(" ", "_").replace("/", "_"))
 
-    # Avoid colliding on code if it exists with a different label
     by_code = db.query(TimelineEventType).filter(TimelineEventType.code == code).first()
     if by_code:
         return by_code.id
@@ -169,27 +107,6 @@ def _get_or_create_manual_event_type(db: Session, label: str) -> int:
     db.add(new_row)
     db.flush()
     return new_row.id
-
-
-def _ymd(d) -> str:
-    if not d:
-        return ""
-    if isinstance(d, datetime):
-        return d.strftime("%Y-%m-%d")
-    if isinstance(d, date):
-        return d.strftime("%Y-%m-%d")
-    if hasattr(d, "strftime"):
-        return d.strftime("%Y-%m-%d")
-    return ""
-
-
-def _parse_ymd(s: Optional[str]) -> Optional[date]:
-    if not s:
-        return None
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except ValueError:
-        return None
 
 
 def _classify_source(ev: TimelineEvent) -> str:
@@ -234,8 +151,6 @@ def _row_from_event(ev: TimelineEvent, case_id: str) -> TimelineEventRow:
     )
 
 
-# ─── 1. List ────────────────────────────────────────────────────────────────
-
 def list_timeline(
     db: Session,
     *,
@@ -263,12 +178,9 @@ def list_timeline(
         all=len(items),
         manual=sum(1 for r in items if r.eventSource == "manual"),
         ai=sum(1 for r in items if r.eventSource == "ai"),
-        # "system" in the count includes AI rows because the UI's left column
-        # (System & AI) shows both.
         system=sum(1 for r in items if r.eventSource in ("system", "ai")),
     )
 
-    # Audit (best-effort)
     try:
         audit.log_event(
             db, user_id=user.id, action="VIEW", module="Case Management",
@@ -285,9 +197,6 @@ def list_timeline(
 
     return CaseTimelineList(items=items, counts=counts)
 
-
-# ─── 2. Add manual event ────────────────────────────────────────────────────
-
 def add_manual_event(
     db: Session,
     *,
@@ -299,8 +208,6 @@ def add_manual_event(
     """Insert a single manual TimelineEvent + Activity + AuditLog."""
     case = _resolve_case(db, user=user, case_id=case_id)
 
-    # Required-ish validation (the frontend already enforces these, but the
-    # backend is the source of truth — never trust the client alone).
     if not body.eventType or not body.eventType.strip():
         raise HTTPException(status_code=400, detail="Event type is required.")
     if not body.title or not body.title.strip():
@@ -308,10 +215,8 @@ def add_manual_event(
     if not (body.description or "").strip():
         raise HTTPException(status_code=400, detail="Description is required.")
 
-    # Event date — default to today if missing/invalid
-    event_date = _parse_ymd(body.date) or datetime.utcnow().date()
+    event_date = _parse_ymd(body.date) or datetime.now(UTC).date()
 
-    # Follow-up sanity: if checked, date is required
     follow_up_date = _parse_ymd(body.followUpDate) if body.followUpRequired else None
     if body.followUpRequired and not follow_up_date:
         raise HTTPException(
@@ -319,10 +224,8 @@ def add_manual_event(
             detail="Follow-up date is required when 'Follow-up Required' is checked.",
         )
 
-    # Officer name — fall back to the caller's display name
     officer = (body.officerName or "").strip() or _format_officer_name(user)
 
-    # Resolve / create the event-type row
     type_id = _get_or_create_manual_event_type(db, body.eventType.strip())
     severity_id = _severity_id_by_label(db, body.severity or "Normal")
 
@@ -350,7 +253,6 @@ def add_manual_event(
     try:
         db.add(ev)
 
-        # Activity (drives dashboard recent feed)
         db.add(Activity(
             title=ev.title,
             description=ev.description or "",
@@ -361,7 +263,6 @@ def add_manual_event(
         ))
         db.flush()
 
-        # Audit
         try:
             audit.log_event(
                 db, user_id=user.id, action="CREATE", module="Case Management",
@@ -383,8 +284,6 @@ def add_manual_event(
     fresh = _resolve_event(db, case=case, event_id=ev.event_id)  # re-load joined rels
     return _row_from_event(fresh, case.case_id)
 
-
-# ─── 3. Delete manual event ─────────────────────────────────────────────────
 
 def delete_manual_event(
     db: Session,

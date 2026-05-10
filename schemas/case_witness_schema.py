@@ -44,8 +44,6 @@ class CaseWitnessesList(BaseModel):
     page:            int
     page_size:       int
 
-    # Drives the dropdown in the JSX. Always returned so the frontend never
-    # has to maintain a hardcoded copy.
     status_options:        List[str]   # ["Active", "Pending", "Closed", …]
     credibility_options:   List[str]   # active WitnessCredibility.label values
     type_options:          List[str]   # active WitnessType.label values

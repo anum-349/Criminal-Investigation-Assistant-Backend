@@ -16,19 +16,7 @@ from services import audit_service as audit
 from schemas.case_suspect_schema import (
     SuspectRow, CaseSuspectsList, UpdateSuspectRequest,
 )
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this case")
-    return case
-
+from services.service_helper import _format_officer_name, _resolve_case
 
 def _resolve_suspect(db: Session, *, case: Case, suspect_id: str) -> CaseSuspect:
     row = (
@@ -47,13 +35,6 @@ def _resolve_suspect(db: Session, *, case: Case, suspect_id: str) -> CaseSuspect
     if not row:
         raise HTTPException(status_code=404, detail=f"Suspect '{suspect_id}' not found")
     return row
-
-
-def _format_officer_name(user: User) -> str:
-    rank = ""
-    if user.investigator and user.investigator.rank:
-        rank = f"{user.investigator.rank}. "
-    return f"{rank}{user.username}"
 
 
 def _suspect_status_id(db: Session, label: Optional[str]) -> Optional[int]:

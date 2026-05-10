@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from schemas.user_schema import (
-    UserRegister, UserLogin, UserUpdate, InvestigatorUpdate, PasswordChange)
+    PictureUploadRequest, PreferencesPayload, PreferencesResponse, UserRegister, UserLogin, UserUpdate, InvestigatorUpdate, PasswordChange)
 from schemas.response_schema import (
     TokenResponse, MeResponse, UserResponse, InvestigatorProfileResponse,
     MessageResponse,
@@ -11,7 +11,7 @@ from schemas.response_schema import (
 
 from dependencies.auth import get_current_user
 from models import User
-from services.user_service import change_password, login_user, logout_user, register_user, update_investigator_profile, update_user_profile
+from services.user_service import change_password, fetch_investigator_profile, get_preferences, login_user, logout_user, register_user, save_preferences, update_investigator_profile, update_user_profile, upload_profile_picture
 
 router = APIRouter()
 
@@ -100,6 +100,30 @@ def complete_investigator_profile(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+@router.get("/investigator/profile", response_model=InvestigatorProfileResponse)
+def get_investigator_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "investigator":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only investigators have an investigator profile.",
+        )
+    try:
+        return fetch_investigator_profile(db, current_user.id)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    
+@router.put("/investigator/profile/picture")
+def upload_picture(
+    body: PictureUploadRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    picture_url = upload_profile_picture(db, current_user.id, body.data_url)
+    return {"picture_url": picture_url}
+
 @router.post("/change-password", response_model=MessageResponse)
 def change_my_password(
     data: PasswordChange,
@@ -117,3 +141,19 @@ def change_my_password(
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    
+@router.get("/preferences", response_model=PreferencesResponse)
+def get_prefs(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return {"preferences": get_preferences(db, current_user.id)}
+
+
+@router.put("/preferences", response_model=PreferencesResponse)
+def save_prefs(
+    body: PreferencesPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return {"preferences": save_preferences(db, current_user.id, body.preferences)}

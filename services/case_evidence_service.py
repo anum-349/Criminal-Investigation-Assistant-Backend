@@ -21,6 +21,7 @@ from schemas.case_evidence_schema import (
     UpdateEvidenceRequest, PhotoUploadRequest,
     PhotoUploadResult, PhotoDeleteResult,
 )
+from services.service_helper import _format_officer_name, _resolve_case
 
 
 UPLOADS_ROOT      = os.getenv("UPLOADS_DIR", "uploads")
@@ -32,14 +33,11 @@ STATUS_ANALYZED = "Analyzed"
 STATUS_PENDING  = "Pending Analysis"
 STATUS_OPTIONS  = [STATUS_ANALYZED, STATUS_PENDING]
 
-# Regex that matches any base-64 data URL regardless of MIME type.
 _DATA_URL_RE = re.compile(
     r"^data:(?P<mime>[\w/+\-.]+);base64,(?P<body>.+)$", re.DOTALL
 )
 
-# Extension lookup for common MIME types (covers files AND photos).
 _MIME_TO_EXT = {
-    # images
     "image/jpeg":      ".jpg",
     "image/jpg":       ".jpg",
     "image/png":       ".png",
@@ -47,41 +45,25 @@ _MIME_TO_EXT = {
     "image/webp":      ".webp",
     "image/bmp":       ".bmp",
     "image/svg+xml":   ".svg",
-    # documents
+
     "application/pdf":                                                        ".pdf",
     "application/msword":                                                     ".doc",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "text/plain":                                                             ".txt",
     "application/rtf":                                                        ".rtf",
-    # video
+
     "video/mp4":       ".mp4",
     "video/webm":      ".webm",
     "video/ogg":       ".ogv",
     "video/quicktime": ".mov",
     "video/x-msvideo": ".avi",
-    # archives
+
     "application/zip":              ".zip",
     "application/x-rar-compressed": ".rar",
     "application/x-7z-compressed":  ".7z",
     "application/gzip":             ".gz",
     "application/x-tar":            ".tar",
 }
-
-
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this case")
-    return case
-
 
 def _resolve_evidence(db: Session, *, case: Case, evidence_id: str) -> Evidence:
     e = (
@@ -121,7 +103,7 @@ def _row_from_evidence(e: Evidence) -> CaseEvidenceRow:
         collectedBy=e.collected_by,
         status=_derive_status(e),
         photos=[_photo_to_out(p) for p in (e.photos or [])],
-        # fileName on the row is the *public URL* so the browser can fetch it.
+
         fileName=_public_url(e.file_name) if e.file_name else None,
         fileMime=e.file_mime,
     )
@@ -145,13 +127,6 @@ def _public_url(file_path: Optional[str]) -> str:
         return f"{UPLOADS_URL_PREFIX.rstrip('/')}/{rel}"
     except Exception:
         return file_path
-
-
-def _format_officer_name(user: User) -> str:
-    rank = ""
-    if user.investigator and user.investigator.rank:
-        rank = f"{user.investigator.rank}. "
-    return f"{rank}{user.username}"
 
 
 def _evidence_type_id(db: Session, label: Optional[str]) -> Optional[int]:
@@ -268,8 +243,6 @@ def _save_file_to_disk(
         f.write(raw)
     return abs_path
 
-
-# ── public API ─────────────────────────────────────────────────────────────────
 
 def list_evidences(
     db: Session,
@@ -424,17 +397,12 @@ def update_evidence(
             e.sha256_hash = None
             changes.append("status → Pending Analysis")
 
-    # ── File attachment ────────────────────────────────────────────────────
-    # Accept any MIME type (video, PDF, doc, zip, …).  We decode the data
-    # URL, write it to disk, and store the on-disk path in file_name so that
-    # _public_url() can serve it via the static mount.
     if body.fileDataUrl:
         try:
             raw, mime = _decode_data_url(body.fileDataUrl, image_only=False)
         except HTTPException:
-            raise  # let FastAPI surface the 400 / 413
+            raise  
 
-        # Delete the old file from disk if it exists and isn't a URL.
         old_path = e.file_name
         if old_path and not old_path.startswith(("http://", "https://", "/")):
             try:
@@ -444,7 +412,6 @@ def update_evidence(
             except Exception:
                 pass
         elif old_path and old_path.startswith("/uploads"):
-            # It's a public URL path — try to resolve on disk.
             try:
                 disk_path = os.path.join(
                     UPLOADS_ROOT,
@@ -507,7 +474,6 @@ def add_photo(
     case = _resolve_case(db, user=user, case_id=case_id)
     e = _resolve_evidence(db, case=case, evidence_id=evidence_id)
 
-    # Photos must be images only.
     raw, mime = _decode_data_url(body.dataUrl, image_only=True)
 
     abs_path = _save_file_to_disk(
@@ -593,7 +559,7 @@ def delete_photo(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Photo delete failed: {ex}")
 
-    # Best-effort disk cleanup.
+    # disk cleanup.
     if file_path and not file_path.startswith(("http://", "https://")):
         prefix_with_slash = UPLOADS_URL_PREFIX.rstrip("/") + "/"
         looks_like_public_url = (

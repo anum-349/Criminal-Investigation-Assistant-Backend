@@ -1,37 +1,6 @@
-"""
-schemas/case_timeline_schema.py
-─────────────────────────────────────────────────────────────────────────────
-Request + response shapes for the case-detail "Timeline" tab
-(src/pages/investigator/case/[id]/CaseTimeline.jsx).
-
-Endpoints these power:
-  GET    /api/investigator/cases/{case_id}/timeline                  (list)
-  POST   /api/investigator/cases/{case_id}/timeline                  (add manual)
-  DELETE /api/investigator/cases/{case_id}/timeline/{event_id}       (delete manual)
-
-Design notes
-────────────
-The Timeline tab has two kinds of rows:
-  • SYSTEM / AI events  — auto-logged by other actions (suspect added, evidence
-    added, AI lead generated, …). These are NOT created via this endpoint;
-    they are written by the "triple-write" helpers in case_detail_service /
-    case_evidence_service / case_lead_service / case_suspect_service.
-    They are returned by the GET endpoint as eventSource="system" (or "ai"
-    for AI-generated rows).
-  • MANUAL events       — typed in by the investigator via AddTimelineDialog.
-    Created here, deletable here.
-
-The response shape mirrors createSystemEvent / createManualEvent in the JS
-constants file, so the existing CaseTimeline.jsx renders DB rows without any
-extra adaptation.
-"""
-
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
-
-
-# ─── Single row (used for GET, POST, internal helpers) ──────────────────────
 
 class TimelineEventRow(BaseModel):
     """One timeline row. Field names match createSystemEvent/createManualEvent
@@ -57,8 +26,6 @@ class TimelineEventRow(BaseModel):
     editable:         bool          = True
 
 
-# ─── List response ──────────────────────────────────────────────────────────
-
 class TimelineCounts(BaseModel):
     """Drives the small subtitle 'X auto-logged · Y manual' on the tab."""
     all:    int = 0
@@ -71,9 +38,6 @@ class CaseTimelineList(BaseModel):
     """GET /api/investigator/cases/{case_id}/timeline response."""
     items:   List[TimelineEventRow]
     counts:  TimelineCounts
-
-
-# ─── POST — Add Manual Timeline Event ───────────────────────────────────────
 
 class AddTimelineEventRequest(BaseModel):
     """
@@ -99,9 +63,6 @@ class AddTimelineEventRequest(BaseModel):
     attachmentNote:   Optional[str] = None
     followUpRequired: bool          = False
     followUpDate:     Optional[str] = None      # YYYY-MM-DD
-
-
-# ─── DELETE response ────────────────────────────────────────────────────────
 
 class DeleteTimelineEventResult(BaseModel):
     deleted_id: str

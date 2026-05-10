@@ -36,6 +36,8 @@ class UserResponse(BaseModel):
 
     id:           int
     username:     str
+    badge_number: str
+    role: str
     email:        Optional[str] = None
     contact_info: Optional[str] = None
     address:      Optional[str] = None
@@ -61,6 +63,7 @@ class InvestigatorProfileResponse(BaseModel):
     """
     user:         UserResponse
     investigator: InvestigatorResponse
+
 
 
 class MessageResponse(BaseModel):

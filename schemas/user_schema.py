@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, Optional
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 class UserRegister(BaseModel):
@@ -39,6 +39,9 @@ class InvestigatorUpdate(UserUpdate):
     specialization: Optional[str] = None
 
 
+class PictureUploadRequest(BaseModel):
+    data_url: str   # base64 data URL from the frontend
+
 class PasswordChange(BaseModel):
     """POST /api/auth/change-password
 
@@ -48,3 +51,9 @@ class PasswordChange(BaseModel):
     """
     current_password: str = Field(min_length=1, description="Current password (for verification)")
     new_password:     str = Field(min_length=8, max_length=128, description="New password (min 8 chars, must contain upper/lower/digit)")
+
+class PreferencesPayload(BaseModel):
+    preferences: Dict[str, bool]  # {"email_notifications": true, ...}
+
+class PreferencesResponse(BaseModel):
+    preferences: Dict[str, bool]

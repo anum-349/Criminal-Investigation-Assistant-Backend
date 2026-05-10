@@ -5,8 +5,8 @@ class EvidencePhotoOut(BaseModel):
     """One photo attached to an evidence row."""
     model_config = ConfigDict(from_attributes=True)
 
-    id:        int                # the EvidencePhoto.id (used by DELETE)
-    url:       str                # served from the static mount, e.g. /uploads/...
+    id:        int                
+    url:       str                
     file_name: Optional[str] = None
     caption:   Optional[str] = None
 

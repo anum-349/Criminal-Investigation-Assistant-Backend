@@ -2,6 +2,36 @@ from typing import List, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, ConfigDict, Field
 
+class VictimPhotoOut(BaseModel):
+    """One photo attached to a victim row.
+    Field naming mirrors EvidencePhotoOut / SuspectPhotoOut."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id:        int
+    url:       str                          
+    file_name: Optional[str] = None
+    caption:   Optional[str] = None
+
+
+class PhotoUploadRequest(BaseModel):
+    """Photo upload as a base-64 data URL (matches what FileReader produces)."""
+    dataUrl:  str
+    fileName: Optional[str] = None
+    caption:  Optional[str] = None
+
+
+class PhotoUploadResult(BaseModel):
+    photo:  VictimPhotoOut
+    photos: List[VictimPhotoOut]            # full updated list
+    photoUrl: Optional[str] = None          # convenience: new avatar URL
+
+
+class PhotoDeleteResult(BaseModel):
+    deleted_id: int
+    photos:     List[VictimPhotoOut]
+    photoUrl:   Optional[str] = None        # convenience: new avatar URL after delete
+
+
 class VictimPersonal(BaseModel):
     name:       Optional[str] = None
     age:        Optional[int] = None
@@ -26,8 +56,8 @@ class VictimProtection(BaseModel):
 
 
 class VictimTimelineItem(BaseModel):
-    """Mirrors the {date, text} shape the UI renders inside the timeline list."""
-    date: Optional[str] = None       # free-text — the form takes any string
+    """{date, text} shape the UI renders inside the timeline list."""
+    date: Optional[str] = None
     text: Optional[str] = None
 
 
@@ -35,19 +65,23 @@ class VictimLegalItem(BaseModel):
     label: str
     done:  bool = False
 
+
 class VictimSummaryRow(BaseModel):
     """Used for the "Victim #1 / IT Professional / Fatal" cards along the top
-    of the page. Same shape as `victimsList` in the JSX."""
+    of the page."""
     model_config = ConfigDict(from_attributes=True)
 
-    id:            str                # external victim_id, e.g. "V-10010"
-    title:         str                # "Victim #1"
-    role:          Optional[str] = None   # = person.occupation
-    status:        str                # raw VictimStatus.label, e.g. "Deceased"
-    statusVariant: str                # "fatal" | "noInjury" | "injured" | …
+    id:            str
+    title:         str
+    role:          Optional[str] = None
+    status:        str
+    statusVariant: str
+
+    photoUrl:      Optional[str] = None
+
 
 class VictimDetail(BaseModel):
-    """Full body the page renders. Mirrors victim1Details verbatim."""
+    """Full body the page renders. Mirrors victim1Details."""
     model_config = ConfigDict(from_attributes=True)
 
     id:                str
@@ -58,12 +92,12 @@ class VictimDetail(BaseModel):
     injurySummary:     Optional[str] = None
     injuryRecordedBy:  Optional[str] = None
 
-    forensic:          List[str]               = []
+    forensic:          List[str]                = []
     timeline:          List[VictimTimelineItem] = []
     protection:        VictimProtection
-    legal:             List[VictimLegalItem]   = []
+    legal:             List[VictimLegalItem]    = []
 
-    nextFollowUp:      Optional[str] = None    # YYYY-MM-DD or free-text
+    nextFollowUp:      Optional[str] = None
     caseType:          Optional[str] = None
     primaryLabel:      Optional[str] = None
     cooperative:       bool = True
@@ -73,19 +107,26 @@ class VictimDetail(BaseModel):
     protectionRequired:   bool = False
 
     statement:         Optional[str] = None
+    status: Optional[str] = None
+    relation: Optional[str] = None
+    injuryType: Optional[str] = None
+
+    photoUrl:          Optional[str] = None
+
+    photos:            List[VictimPhotoOut] = []
 
 
 class CaseVictimsList(BaseModel):
     """GET /api/investigator/cases/{case_id}/victims response."""
     items:           List[VictimSummaryRow]
     total:           int
-    status_options:  List[str]                # active VictimStatus.label values
+    status_options:  List[str]
 
 
 class UpdateVictimRequest(BaseModel):
     """One victim entry from AddVictimDialog (update mode). StepVictims emits
-    the entire victim object flat; we keep `extra='ignore'` so unknown
-    UI-only fields (like `_extractedByAI`) don't break the validation."""
+    the entire victim object flat; `extra='ignore'` so unknown UI-only fields
+    don't break validation."""
     model_config = ConfigDict(extra="ignore")
 
     # Person
@@ -98,9 +139,9 @@ class UpdateVictimRequest(BaseModel):
     occupation:  Optional[str] = None
 
     # CaseVictim core
-    status:             Optional[str] = None     # VictimStatus.label
+    status:             Optional[str] = None
     primaryLabel:       Optional[str] = None
-    relation:           Optional[str] = None     # → relation_to_suspect
+    relation:           Optional[str] = None
     injuryType:         Optional[str] = None
     natureOfInjuries:   Optional[str] = None
     causeOfDeath:       Optional[str] = None
@@ -109,7 +150,7 @@ class UpdateVictimRequest(BaseModel):
     injurySummary:      Optional[str] = None
     injuryRecordedBy:   Optional[str] = None
     statement:          Optional[str] = None
-    caseType:           Optional[str] = None     # informational only — UI-side label
+    caseType:           Optional[str] = None
 
     # Booleans
     medicalReport:       Optional[bool] = None
@@ -118,12 +159,12 @@ class UpdateVictimRequest(BaseModel):
     cooperative:         Optional[bool] = None
 
     # Protection
-    threatLevel:        Optional[str] = None    # Severity.label, e.g. "Low"
-    protectionAssigned: Optional[str] = None    # text — "Yes", "No", or assignee name
+    threatLevel:        Optional[str] = None
+    protectionAssigned: Optional[str] = None
     protectionNotes:    Optional[str] = Field(default=None, alias="notes")
 
     # Follow-up
-    nextFollowUp:       Optional[str] = None    # YYYY-MM-DD (or empty)
+    nextFollowUp:       Optional[str] = None
 
     # Child-table replacements (full lists; backend wipes & re-inserts)
     forensic:           Optional[List[str]]               = None

@@ -16,12 +16,7 @@ from schemas.case_linked_schema import (
     LinkedStatusOption,
     CaseLinkedCasesList,
 )
-
-
-# ─── Frontend-facing label tables ───────────────────────────────────────────
-# These mirror the original mock data in CaseLinkedCases.jsx so the UI
-# behaves identically to the mock until we start seeding richer link_type
-# values. Add new rows as you seed new CaseLink.link_type codes.
+from services.service_helper import _resolve_case
 
 LINK_TYPE_LABEL = {
     # link_type code           → human-readable label                  variant
@@ -37,8 +32,6 @@ LINK_TYPE_LABEL = {
     "OTHER":                  ("Other relation",                       "default"),
 }
 
-# Case-status label → Badge variant. Keep loose so labels like
-# "Under Investigation" still resolve sensibly.
 def _status_variant(label: str) -> str:
     s = (label or "").lower()
     if "open" in s or "active" in s or "under" in s:
@@ -48,29 +41,6 @@ def _status_variant(label: str) -> str:
     if "pending" in s:
         return "warning"
     return "default"
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    """Look up the parent case by external case_id and verify the user
-    has permission to view it. Mirrors the helper in case_detail_service."""
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-
-    # Investigators can only see their own cases. Admins see anything.
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have access to this case.",
-        )
-    return case
-
 
 def _format_investigator(case: Case) -> str:
     """'Insp. A. Khan' or '—'."""
@@ -95,8 +65,7 @@ def _row_from_link(link: CaseLink, other_case: Case) -> LinkedCaseRow:
         link.link_type,
         (link.link_type.replace("_", " ").title(), "default"),
     )
-    # explanation, when present, is more specific than the generic label —
-    # prefer it but keep it short.
+
     relation_text = (link.explanation or "").strip() or label
 
     return LinkedCaseRow(
@@ -117,7 +86,6 @@ def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
     """Pull both directions of the link, eager-loading what we need."""
     OtherCaseAlias = aliased(Case)
 
-    # Out: source = this case, target = other
     out_q = (
         db.query(CaseLink, OtherCaseAlias)
         .join(OtherCaseAlias, CaseLink.target_case_id == OtherCaseAlias.id)
@@ -132,7 +100,6 @@ def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
         )
     )
 
-    # In: target = this case, source = other
     in_q = (
         db.query(CaseLink, OtherCaseAlias)
         .join(OtherCaseAlias, CaseLink.source_case_id == OtherCaseAlias.id)
@@ -151,8 +118,7 @@ def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
     pairs.extend(out_q.all())
     pairs.extend(in_q.all())
 
-    # De-duplicate by (link_type, other_case_id) — A→B and B→A with the
-    # same link_type both surface here; keep one. Prefer the "out" row.
+
     seen = set()
     deduped: List[Tuple[CaseLink, Case]] = []
     for link, other in pairs:
@@ -162,12 +128,9 @@ def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
         seen.add(key)
         deduped.append((link, other))
 
-    # Newest first — gives a sensible default ordering.
     deduped.sort(key=lambda p: p[0].created_at or datetime.min, reverse=True)
     return deduped
 
-
-# ─── Filter application ────────────────────────────────────────────────────
 
 def _apply_filters(
     rows: List[LinkedCaseRow],
@@ -192,8 +155,6 @@ def _apply_filters(
         ]
 
     if relation:
-        # Match against either the link_type code OR a substring of the
-        # human label — that way the dropdown's 'value' can be either.
         rel = relation.lower()
         out = [
             r for r in out
@@ -210,8 +171,6 @@ def _apply_filters(
 
     return out
 
-
-# ─── Public service method ──────────────────────────────────────────────────
 
 def list_linked_cases(
     db: Session,
@@ -247,8 +206,6 @@ def list_linked_cases(
     end = start + page_size
     items = filtered[start:end]
 
-    # Build dropdown options from the link_types that actually appear
-    # for this case, plus a mandatory "Relation" placeholder for "any".
     seen_types = []
     for r in all_rows:
         if r.linkType and r.linkType not in seen_types:
@@ -265,8 +222,7 @@ def list_linked_cases(
             LinkedRelationOption(value=code, label=label, variant=variant)
         )
 
-    # Status options — pulled from the labels actually present in results,
-    # so the dropdown won't list statuses with zero rows.
+
     seen_statuses = []
     for r in all_rows:
         if r.status and r.status not in seen_statuses:
@@ -280,7 +236,6 @@ def list_linked_cases(
             LinkedStatusOption(value=s, label=s, variant=_status_variant(s))
         )
 
-    # Audit the view (best-effort, never fatal)
     try:
         audit.log_event(
             db,

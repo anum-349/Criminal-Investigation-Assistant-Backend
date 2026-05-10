@@ -1,45 +1,3 @@
-"""
-services/case_location_service.py
-─────────────────────────────────────────────────────────────────────────────
-Business logic for the "Location" tab on the case-detail page.
-
-What this builds
-────────────────
-1. The address card (from Location row).
-2. The scene-security card. Two of those three fields ("securedBy",
-   "securedOn", "releasedOn") aren't columns on the Location model.
-   We derive them from:
-     - Location.scene_access ("Secured by Police", "Released", …)
-     - The earliest timeline event tagged as a SCENE-SECURED action
-       (or, failing that, the case's created_at as a sane fallback)
-     - The first SCENE-RELEASED event if one exists, else "Pending"
-   If you later add explicit columns (secured_by, secured_on,
-   released_on) to Location, swap the helpers below to read them
-   instead — the response shape is unaffected.
-
-3. The proximity card.
-   - "nearest police station" comes from Location.police_station, with
-     no distance figure unless we can reverse-look-up that station's
-     coordinates. For now we just show the station name.
-   - "landmarks" comes from Location.landmarks (newline- or
-     comma-separated text → list).
-   - "nearest hospital" needs an external dataset we don't have yet —
-     left as None so the JSX hides the row.
-
-4. The nearby-cases list / map pins.
-   We compute great-circle distance with the haversine formula. To keep
-   it fast even on SQLite, we first apply a bounding-box pre-filter
-   (lat/lng deltas for the radius) so the database only ships rows that
-   could possibly be inside the circle, then we refine in Python.
-
-Permission scoping
-──────────────────
-Same as the other case-detail services: investigators can only open
-their own cases. Once they can, they see all nearby cases regardless of
-ownership — that's the whole point of "nearby cases" as an analytic.
-Admins always see everything.
-"""
-
 import math
 from typing import List, Optional, Tuple
 from datetime import datetime
@@ -49,9 +7,9 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import Request, HTTPException
 
 from models import (
-    User, Investigator,
-    Case, CaseStatus, CaseType, Severity,
-    Location, City, Province,
+    User,
+    Case, 
+    Location,
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
@@ -63,29 +21,16 @@ from schemas.case_location_schema import (
     NearbyCase,
     CaseLocationResponse,
 )
+from services.service_helper import _resolve_case
 
-
-# ─── Constants ─────────────────────────────────────────────────────────────
-
-# Earth radius for haversine — kilometres.
 EARTH_RADIUS_KM = 6371.0
 
-# Default search radius for nearby cases. The endpoint accepts a query
-# param to override this; 3 km is enough to cover one neighbourhood
-# (e.g. all of Clifton from a single Clifton address) without flooding
-# the panel with cross-city noise.
 DEFAULT_NEARBY_RADIUS_KM = 3.0
 MAX_NEARBY_RESULTS       = 50
 
-# Timeline event-type codes we treat as "scene secured" / "scene released".
-# These mirror the SYSTEM_EVENT codes in caseEventConstants.js. If your
-# code uses different strings, edit these tuples — nothing else changes.
 SCENE_SECURED_CODES  = ("SCENE_SECURED", "SCENE_SEALED", "SCENE_PROCESSED")
 SCENE_RELEASED_CODES = ("SCENE_RELEASED",)
 
-# Severity normalization — what we store vs what the JSX SEVERITY_STYLE map
-# keys on. The JSX uses Title-case ("Critical", "Low"). Lookup labels are
-# usually already Title-case, but we normalize defensively.
 def _normalize_severity(label: Optional[str]) -> str:
     if not label:
         return "Low"
@@ -94,33 +39,7 @@ def _normalize_severity(label: Optional[str]) -> str:
     if s == "high":           return "High"
     if s == "medium":         return "Medium"
     if s == "low":            return "Low"
-    # Anything else (e.g. "Normal") falls back to Low so the row still
-    # renders with a colour — better than showing an unstyled badge.
     return "Low"
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
-
-def _resolve_case(db: Session, *, user: User, case_id: str) -> Case:
-    """Same pattern as the other detail services."""
-    case = (
-        db.query(Case)
-        .filter(Case.case_id == case_id, Case.is_deleted == False)  # noqa: E712
-        .options(
-            joinedload(Case.location).joinedload(Location.city),
-            joinedload(Case.location).joinedload(Location.province),
-        )
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-    if user.role != "admin" and case.assigned_investigator_id != user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have access to this case.",
-        )
-    return case
-
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     """Great-circle distance between two (lat, lng) pairs in kilometres."""
@@ -146,8 +65,6 @@ def _bbox(lat: float, lng: float, radius_km: float) -> Tuple[float, float, float
     dlng = radius_km / (111.32 * cos_lat)
     return (lat - dlat, lat + dlat, lng - dlng, lng + dlng)
 
-
-# ─── Field formatters ──────────────────────────────────────────────────────
 
 def _format_full_address(loc: Location) -> str:
     """Pick the most-detailed address string we can without duplicating."""
@@ -192,8 +109,6 @@ def _split_landmarks(raw: Optional[str]) -> List[str]:
     return [b.strip() for b in bits if b.strip()]
 
 
-# ─── Scene-security derivation ─────────────────────────────────────────────
-
 def _derive_scene_security(db: Session, case: Case) -> SceneSecurity:
     """
     Build the SceneSecurity card content.
@@ -233,9 +148,6 @@ def _derive_scene_security(db: Session, case: Case) -> SceneSecurity:
         secured_by = secured_event.officer_name
         secured_on = _format_when(secured_event.created_at)
     else:
-        # Fallback — show who registered the case as "secured by", and
-        # use the registration time. Better than empty fields for a tab
-        # that's already in production.
         if case.assigned_to and case.assigned_to.user:
             inv = case.assigned_to
             rank = (inv.rank or "").strip()
@@ -256,9 +168,6 @@ def _derive_proximity(loc: Location) -> ProximityInfo:
     """Best-effort proximity card from what the Location model gives us."""
     police_line = None
     if loc.police_station:
-        # We don't have a dataset of station coordinates yet, so we can't
-        # compute the distance. Show the name; the JSX will render it
-        # without the "– 1.2 km" suffix.
         police_line = loc.police_station
 
     return ProximityInfo(
@@ -267,8 +176,6 @@ def _derive_proximity(loc: Location) -> ProximityInfo:
         landmarks=_split_landmarks(loc.landmarks),
     )
 
-
-# ─── Nearby cases ──────────────────────────────────────────────────────────
 
 def _find_nearby_cases(
     db: Session,
@@ -281,7 +188,6 @@ def _find_nearby_cases(
     """Spatial query — see module docstring for the bbox-then-haversine plan."""
     lat_min, lat_max, lng_min, lng_max = _bbox(center.lat, center.lng, radius_km)
 
-    # Bounding-box pre-filter. Excludes the parent case itself.
     q = (
         db.query(Case)
         .join(Location, Location.case_id_fk == Case.id)
@@ -323,12 +229,9 @@ def _find_nearby_cases(
             )
         )
 
-    # Closest first — that's the order the panel reads best in.
     rows.sort(key=lambda r: r.distanceKm)
     return rows[: max(1, min(limit, MAX_NEARBY_RESULTS))]
 
-
-# ─── Public service method ─────────────────────────────────────────────────
 
 def get_case_location(
     db: Session,
@@ -343,7 +246,6 @@ def get_case_location(
     case = _resolve_case(db, user=user, case_id=case_id)
     loc = case.location
 
-    # Audit (best-effort)
     try:
         audit.log_event(
             db,
@@ -359,7 +261,6 @@ def get_case_location(
     except Exception:
         db.rollback()
 
-    # No location row at all → empty-state response.
     if not loc:
         return CaseLocationResponse(
             case_id=case.case_id,
@@ -371,7 +272,6 @@ def get_case_location(
             nearby=[],
         )
 
-    # Address card
     coords = None
     if loc.latitude is not None and loc.longitude is not None:
         coords = LatLng(lat=loc.latitude, lng=loc.longitude)
@@ -386,11 +286,9 @@ def get_case_location(
         coordinates=coords,
     )
 
-    # Scene security + proximity
     security = _derive_scene_security(db, case)
     proximity = _derive_proximity(loc)
 
-    # Nearby cases — only meaningful when we have coordinates.
     nearby: List[NearbyCase] = []
     if coords:
         nearby = _find_nearby_cases(
@@ -401,10 +299,6 @@ def get_case_location(
             limit=nearby_limit,
         )
 
-    # Scene notes — Location doesn't have its own notes column, so we
-    # reuse Case.description? No — that's the case description, not scene
-    # notes. Leave None and let the JSX hide the amber card. If/when you
-    # add a `Location.scene_notes` column, plug it in here.
     notes = None
 
     return CaseLocationResponse(
