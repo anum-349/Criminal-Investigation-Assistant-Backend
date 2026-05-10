@@ -9,6 +9,8 @@
 **/sqlite_data/**/*
 *.log
 
+.env
+
 uploads/
 
 alembic/versions/__pycache__/
