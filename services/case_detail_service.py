@@ -9,10 +9,6 @@ from fastapi import Request, HTTPException
 import os                                                        
 import db
 from models import EvidencePhoto                                  
-from services.case_evidence_service import (                      
-    _decode_data_url, _ext_for_mime,                              
-    UPLOADS_ROOT,                                                 
-)  
 
 from models import (
     User, Investigator, Person,
@@ -29,7 +25,7 @@ from schemas.case_detail_schema import (
     TimelineEventOut, AddTimelineResult,
     SuspectInput, EvidenceInput, VictimInput, WitnessInput,
 )
-from services.service_helper import _resolve_person, _resolve_case, _format_officer_name, _ymd
+from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _resolve_person, _resolve_case, _format_officer_name, _ymd
 
 
 def _short_id(prefix: str, case_id: str, count: int) -> str:

@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import UTC, datetime, date
 from typing import List, Optional
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, Request
 
 from models import (
+    PersonPhoto,
     User,
     Case, Person,
     CaseWitness, WitnessCredibility, WitnessType,
@@ -14,12 +16,13 @@ from models import (
     Severity,
     TimelineEvent, TimelineEventType,
 )
+from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
 from services import audit_service as audit
 from schemas.case_witness_schema import (
     WitnessRow, CaseWitnessesList,
-    UpdateWitnessRequest,
+    UpdateWitnessRequest, 
 )
-from services.service_helper import _format_officer_name, _parse_ymd, _resolve_case, _ymd
+from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _format_officer_name, _parse_ymd, _public_url, _resolve_case, _ymd
 
 
 STATUS_OPTIONS = ["Active", "Pending", "Closed", "Hostile", "Unavailable"]
@@ -32,7 +35,7 @@ def _resolve_witness(db: Session, *, case: Case, witness_id: str) -> CaseWitness
             CaseWitness.witness_id == witness_id,
         )
         .options(
-            joinedload(CaseWitness.person),
+            joinedload(CaseWitness.person).joinedload(Person.photo),
             joinedload(CaseWitness.credibility),
             joinedload(CaseWitness.witness_type),
             joinedload(CaseWitness.case),
@@ -80,6 +83,9 @@ def _row_from_witness(w: CaseWitness) -> WitnessRow:
     contact = None if is_anon else (p.contact    if p else None)
     address = None if is_anon else (p.address    if p else None)
 
+    photo_url = None
+    if p and p.photo:
+        photo_url = _public_url(p.photo.file_path)
     return WitnessRow(
         id=w.witness_id,
         witnessId=w.witness_id,
@@ -101,7 +107,108 @@ def _row_from_witness(w: CaseWitness) -> WitnessRow:
         anonymous=is_anon,
         protectionRequired=bool(w.protection_required),
         cooperating=bool(w.cooperating),
+        photoUrl=photo_url
     )
+
+def _save_witness_photo_to_disk(
+    raw: bytes, mime: str, *,
+    case_id: str, witness_id: str, original_name: Optional[str],
+) -> str:
+    folder = os.path.join(UPLOADS_ROOT, "witnesses", case_id, witness_id)
+    os.makedirs(folder, exist_ok=True)
+    ext = _ext_for_mime(mime, original_name)
+    fname = f"{secrets.token_hex(8)}{ext}"
+    abs_path = os.path.join(folder, fname)
+    with open(abs_path, "wb") as f:
+        f.write(raw)
+    return abs_path
+
+def add_witness_photo(
+    db: Session, *,
+    user: User, case_id: str, witness_id: str,
+    body,
+    request: Optional[Request],
+):
+    case    = _resolve_case(db, user=user, case_id=case_id)
+    witness = _resolve_witness(db, case=case, witness_id=witness_id)
+    person  = witness.person
+
+    raw, mime = _decode_data_url(body.dataUrl, image_only=True)
+
+    # Upsert — delete existing first
+    existing = db.query(PersonPhoto).filter(PersonPhoto.person_id == person.id).first()
+    if existing:
+        try: os.remove(existing.file_path)
+        except Exception: pass
+        db.delete(existing)
+        db.flush()
+
+    abs_path = _save_witness_photo_to_disk(
+        raw, mime, case_id=case_id,
+        witness_id=witness_id, original_name=body.fileName,
+    )
+
+    photo = PersonPhoto(
+        person_id=person.id,
+        file_path=abs_path,
+        file_name=body.fileName or os.path.basename(abs_path),
+        file_mime=mime,
+        file_size=len(raw),
+    )
+    db.add(photo)
+
+    try:
+        db.flush()
+        _log_witness_action(
+            db, case=case, user=user, request=request,
+            title=f"Photo Updated: {witness.witness_id}",
+            description=f"Photo '{photo.file_name}' attached.",
+            audit_action="UPDATE",
+            audit_target_id=witness.witness_id,
+        )
+        db.commit()
+    except Exception as ex:
+        db.rollback()
+        try: os.remove(abs_path)
+        except Exception: pass
+        raise HTTPException(status_code=500, detail=f"Photo upload failed: {ex}")
+
+    return PersonPhotoUploadResult(photoUrl=_public_url(abs_path))
+
+
+def delete_witness_photo(
+    db: Session, *,
+    user: User, case_id: str, witness_id: str,
+    request: Optional[Request],
+):
+    case    = _resolve_case(db, user=user, case_id=case_id)
+    witness = _resolve_witness(db, case=case, witness_id=witness_id)
+    person  = witness.person
+
+    photo = db.query(PersonPhoto).filter(PersonPhoto.person_id == person.id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="No photo found")
+
+    file_path = photo.file_path
+    db.delete(photo)
+
+    try:
+        _log_witness_action(
+            db, case=case, user=user, request=request,
+            title=f"Photo Removed: {witness.witness_id}",
+            description="Photo deleted.",
+            audit_action="UPDATE",
+            audit_target_id=witness.witness_id,
+        )
+        db.commit()
+    except Exception as ex:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Photo delete failed: {ex}")
+
+    try: os.remove(file_path)
+    except Exception: pass
+
+    return PersonPhotoDeleteResult(deleted=True, photoUrl=None)
 
 def _log_witness_action(
     db: Session, *,

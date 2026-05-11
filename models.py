@@ -349,7 +349,22 @@ class Person(Base):
     victim_roles  = relationship("CaseVictim",  back_populates="person")
     witness_roles = relationship("CaseWitness", back_populates="person")
 
+    photo = relationship("PersonPhoto", back_populates="person", uselist=False) 
+    
     __table_args__ = (Index("ix_person_name", "full_name"),)
+
+class PersonPhoto(Base):
+    __tablename__ = "person_photos"
+
+    id        = Column(Integer, primary_key=True)
+    person_id = Column(Integer, ForeignKey("persons.id", ondelete="CASCADE"), unique=True, nullable=False)  # unique = one photo per person
+    file_path = Column(String(500), nullable=False)
+    file_name = Column(String(255), nullable=True)
+    file_mime = Column(String(80),  nullable=True)
+    file_size = Column(Integer,     nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.now(UTC))
+
+    person = relationship("Person", back_populates="photo")
 
 # SECTION 4 — CASE
 class Case(Base):
@@ -706,10 +721,6 @@ class CaseVictim(Base):
         "VictimLegalMilestone", back_populates="case_victim",
         cascade="all, delete-orphan", passive_deletes=True,
     )
-    photos = relationship(
-        "VictimPhoto", back_populates="case_victim",
-        cascade="all, delete-orphan", passive_deletes=True,
-    )
 
     __table_args__ = (
         UniqueConstraint("case_id_fk", "person_id", name="uq_case_victim"),
@@ -766,26 +777,6 @@ class CaseWitness(Base):
     )
 
 # SECTION 8 — VICTIM CHILD TABLES
-
-class VictimPhoto(Base):
-    __tablename__ = "victim_photos"
- 
-    id              = Column(Integer, primary_key=True)
-    case_victim_id  = Column(
-        Integer,
-        ForeignKey("case_victims.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    file_path = Column(String(500), nullable=False)
-    file_name = Column(String(255), nullable=True)
-    file_mime = Column(String(80),  nullable=True)
-    file_size = Column(Integer, nullable=True)
-    caption   = Column(Text, nullable=True)
- 
-    uploaded_at = Column(DateTime, default=datetime.now(UTC))
- 
-    case_victim = relationship("CaseVictim", back_populates="photos")
-
 class VictimForensicFinding(Base):
     __tablename__ = "victim_forensic_findings"
 

@@ -7,25 +7,26 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, Request
 
 from models import (
+    PersonPhoto,
     User,
     Case, Person,
     CaseVictim,
-    VictimPhoto, VictimStatus,
+    VictimStatus,
     VictimForensicFinding, VictimTimelineEntry, VictimLegalMilestone,
     Activity,
     Severity,
     TimelineEvent, TimelineEventType,
 )
+from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
 from services import audit_service as audit
 from schemas.case_victim_schema import (
-    PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, VictimPhotoOut, VictimSummaryRow, VictimDetail,
+    VictimSummaryRow, VictimDetail,
     VictimPersonal, VictimIncident, VictimProtection,
     VictimTimelineItem, VictimLegalItem,
     CaseVictimsList,
     UpdateVictimRequest,
 )
-from services.case_evidence_service import UPLOADS_ROOT, UPLOADS_URL_PREFIX, _decode_data_url, _ext_for_mime, _public_url
-from services.service_helper import _format_officer_name, _parse_ymd, _resolve_case, _ymd
+from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _format_officer_name, _parse_ymd, _public_url, _resolve_case, _ymd
 
 def _victim_status_id(db: Session, label: Optional[str]) -> Optional[int]:
     if not label:
@@ -129,7 +130,6 @@ def list_victims(
         .options(
             joinedload(CaseVictim.person),
             joinedload(CaseVictim.status),
-            joinedload(CaseVictim.photos),    
             joinedload(CaseVictim.case).joinedload(Case.case_type),
         )
     )
@@ -378,24 +378,6 @@ def update_victim(
     fresh = _resolve_victim(db, case=case, victim_id=victim.victim_id)
     return _detail_from_victim(fresh)
 
-def _victim_photo_to_out(p: VictimPhoto) -> VictimPhotoOut:
-    return VictimPhotoOut(
-        id=p.id,
-        url=_public_url(p.file_path),
-        file_name=p.file_name,
-        caption=p.caption,
-    )
-
-
-def _avatar_url_from_photos(photos) -> Optional[str]:
-    """The first photo (lowest id) is the avatar — same convention as
-    SuspectPhoto. Returns None if no photos exist."""
-    if not photos:
-        return None
-    first = sorted(photos, key=lambda p: p.id)[0]
-    return _public_url(first.file_path)
-
-
 def _save_victim_photo_to_disk(
     raw: bytes, mime: str, *,
     case_id: str, victim_id: str, original_name: Optional[str],
@@ -412,21 +394,6 @@ def _save_victim_photo_to_disk(
     return abs_path
 
 
-def _resolve_victim_photo(
-    db: Session, *, victim: CaseVictim, photo_id: int,
-) -> VictimPhoto:
-    p = (
-        db.query(VictimPhoto)
-        .filter(
-            VictimPhoto.id == photo_id,
-            VictimPhoto.case_victim_id == victim.id,
-        )
-        .first()
-    )
-    if not p:
-        raise HTTPException(status_code=404, detail="Photo not found")
-    return p
-
 def _detail_from_victim(v: CaseVictim) -> VictimDetail:
     p = v.person
 
@@ -439,8 +406,8 @@ def _detail_from_victim(v: CaseVictim) -> VictimDetail:
         key=lambda t: t.entry_date or date.min,
     )
     legal = list(v.legal_milestones or [])
-
-    photos_sorted = sorted(v.photos or [], key=lambda x: x.id)   # ← NEW
+    
+    photo = v.person.photo if v.person else None
 
     return VictimDetail(
         id=v.victim_id,
@@ -485,8 +452,7 @@ def _detail_from_victim(v: CaseVictim) -> VictimDetail:
         protectionRequired=bool(v.protection_required),
         statement=v.statement,
 
-        photoUrl=_avatar_url_from_photos(photos_sorted),
-        photos=[_victim_photo_to_out(ph) for ph in photos_sorted],
+        photoUrl = _public_url(photo.file_path) if photo else None
     )
 
 
@@ -504,7 +470,6 @@ def _resolve_victim(db: Session, *, case: Case, victim_id: str) -> CaseVictim:
             joinedload(CaseVictim.forensic_findings),
             joinedload(CaseVictim.timeline_entries),
             joinedload(CaseVictim.legal_milestones),
-            joinedload(CaseVictim.photos),               
             joinedload(CaseVictim.case),
         )
         .first()
@@ -514,109 +479,50 @@ def _resolve_victim(db: Session, *, case: Case, victim_id: str) -> CaseVictim:
         raise HTTPException(status_code=404, detail=f"Victim '{victim_id}' not found")
     return v
 
-def add_victim_photo(
-    db: Session, *,
-    user: User, case_id: str, victim_id: str,
-    body: PhotoUploadRequest,
-    request: Optional[Request],
-) -> PhotoUploadResult:
-    """POST /api/investigator/cases/{case_id}/victims/{victim_id}/photos
-    Photos must be images. Triple-write timeline + activity + audit on success."""
-    case = _resolve_case(db, user=user, case_id=case_id)
+def add_victim_photo(db, *, user, case_id, victim_id, body, request: Optional[Request]):
+    case   = _resolve_case(db, user=user, case_id=case_id)
     victim = _resolve_victim(db, case=case, victim_id=victim_id)
+    person = victim.person
 
     raw, mime = _decode_data_url(body.dataUrl, image_only=True)
 
-    abs_path = _save_victim_photo_to_disk(
-        raw, mime,
-        case_id=case_id,
-        victim_id=victim_id,
-        original_name=body.fileName,
-    )
+    # Delete old photo file + DB row if exists
+    existing = db.query(PersonPhoto).filter(PersonPhoto.person_id == person.id).first()
+    if existing:
+        try: os.remove(existing.file_path)
+        except Exception: pass
+        db.delete(existing)
+        db.flush()
 
-    photo = VictimPhoto(
-        case_victim_id=victim.id,
+    abs_path = _save_victim_photo_to_disk(raw, mime, case_id=case_id,
+                   victim_id=victim_id, original_name=body.fileName)
+
+    photo = PersonPhoto(
+        person_id=person.id,
         file_path=abs_path,
         file_name=body.fileName or os.path.basename(abs_path),
         file_mime=mime,
         file_size=len(raw),
-        caption=body.caption,
     )
     db.add(photo)
+    db.flush()
+    db.commit()
 
-    try:
-        db.flush()
-        _log_victim_action(
-            db, case=case, user=user, request=request,
-            title=f"Photo Added: {victim.victim_id}",
-            description=f"Photo '{photo.file_name}' attached.",
-            audit_action="UPDATE",
-            audit_target_id=victim.victim_id,
-        )
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        try: os.remove(abs_path)
-        except Exception: pass
-        raise
-    except Exception as ex:
-        db.rollback()
-        try: os.remove(abs_path)
-        except Exception: pass
-        raise HTTPException(status_code=500, detail=f"Photo upload failed: {ex}")
+    return PersonPhotoUploadResult(photoUrl=_public_url(abs_path))
 
-    db.refresh(victim)
-    photos_sorted = sorted(victim.photos, key=lambda x: x.id)
-    return PhotoUploadResult(
-        photo=_victim_photo_to_out(photo),
-        photos=[_victim_photo_to_out(p) for p in photos_sorted],
-        photoUrl=_avatar_url_from_photos(photos_sorted),
-    )
-
-
-def delete_victim_photo(
-    db: Session, *,
-    user: User, case_id: str, victim_id: str, photo_id: int,
-    request: Optional[Request],
-) -> PhotoDeleteResult:
-    """DELETE /api/investigator/cases/{case_id}/victims/{victim_id}/photos/{photo_id}"""
-    case = _resolve_case(db, user=user, case_id=case_id)
+def delete_victim_photo(db, *, user, case_id, victim_id, request):
+    case   = _resolve_case(db, user=user, case_id=case_id)
     victim = _resolve_victim(db, case=case, victim_id=victim_id)
-    photo = _resolve_victim_photo(db, victim=victim, photo_id=photo_id)
 
-    fname = photo.file_name or f"photo {photo.id}"
+    photo = db.query(PersonPhoto).filter(PersonPhoto.person_id == victim.person_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="No photo found")
+
     file_path = photo.file_path
     db.delete(photo)
+    db.commit()
 
-    try:
-        _log_victim_action(
-            db, case=case, user=user, request=request,
-            title=f"Photo Removed: {victim.victim_id}",
-            description=f"Photo '{fname}' deleted.",
-            audit_action="UPDATE",
-            audit_target_id=victim.victim_id,
-        )
-        db.commit()
-    except HTTPException:
-        db.rollback(); raise
-    except Exception as ex:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Photo delete failed: {ex}")
+    try: os.remove(file_path)
+    except Exception: pass
 
-    if file_path and not file_path.startswith(("http://", "https://")):
-        prefix_with_slash = UPLOADS_URL_PREFIX.rstrip("/") + "/"
-        looks_like_public_url = (
-            file_path.startswith(prefix_with_slash) and not os.path.exists(file_path)
-        )
-        if not looks_like_public_url:
-            try: os.remove(file_path)
-            except FileNotFoundError: pass
-            except Exception: pass
-
-    db.refresh(victim)
-    photos_sorted = sorted(victim.photos, key=lambda x: x.id)
-    return PhotoDeleteResult(
-        deleted_id=photo_id,
-        photos=[_victim_photo_to_out(p) for p in photos_sorted],
-        photoUrl=_avatar_url_from_photos(photos_sorted),
-    )
+    return PersonPhotoDeleteResult(deleted=True, photoUrl=None)

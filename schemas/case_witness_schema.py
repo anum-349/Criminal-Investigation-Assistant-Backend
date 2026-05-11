@@ -37,6 +37,8 @@ class WitnessRow(BaseModel):
     anonymous:           bool = False
     protectionRequired:  bool = False
     cooperating:         bool = True
+    
+    photoUrl: Optional[str] = None
 
 class CaseWitnessesList(BaseModel):
     items:           List[WitnessRow]

@@ -10,9 +10,10 @@ from models import User
 from schemas.case_linked_schema import CaseLinkedCasesList
 from schemas.case_location_schema import CaseLocationResponse
 from schemas.case_victim_schema import (
-    CaseVictimsList, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, VictimDetail,
+    CaseVictimsList, VictimDetail,
     UpdateVictimRequest,
 )
+from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadRequest, PersonPhotoUploadResult
 from services import case_linked_service, case_location_service, case_victim_service as svc
 
 from schemas.all_cases_schema import AllCasesRow
@@ -152,6 +153,39 @@ def update_witness(
         body=body, request=request,
     )
 
+@router.post(
+    "/{case_id}/witnesses/{witness_id}/photos",
+    response_model=PersonPhotoUploadResult,
+)
+def add_witness_photo(
+    case_id: str,
+    witness_id: str,
+    body: PersonPhotoUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+):
+    return swc.add_witness_photo(
+        db, user=user, case_id=case_id, witness_id=witness_id,
+        body=body, request=request,
+    )
+
+
+@router.delete(
+    "/{case_id}/witnesses/{witness_id}/photo",
+    response_model=PersonPhotoDeleteResult,
+)
+def delete_witness_photo(
+    case_id: str,
+    witness_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+):
+    return swc.delete_witness_photo(
+        db, user=user, case_id=case_id, witness_id=witness_id,
+        request=request,
+    )
 
 @router.get(
     "/{case_id}/linked-cases",
@@ -218,12 +252,12 @@ def get_case_location(
 
 @router.post(
     "/{case_id}/victims/{victim_id}/photos",
-    response_model=PhotoUploadResult,
+    response_model=PersonPhotoUploadResult,
 )
 def add_victim_photo(
     case_id: str,
     victim_id: str,
-    body: PhotoUploadRequest,
+    body: PersonPhotoUploadRequest,
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_investigator),
@@ -238,19 +272,18 @@ def add_victim_photo(
 
 
 @router.delete(
-    "/{case_id}/victims/{victim_id}/photos/{photo_id}",
-    response_model=PhotoDeleteResult,
+    "/{case_id}/victims/{victim_id}/photo",
+    response_model=PersonPhotoDeleteResult,
 )
 def delete_victim_photo(
     case_id: str,
     victim_id: str,
-    photo_id: int,
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_investigator),
 ):
     return svc.delete_victim_photo(
-        db, user=user, case_id=case_id, victim_id=victim_id, photo_id=photo_id,
+        db, user=user, case_id=case_id, victim_id=victim_id,
         request=request,
     )
 
@@ -555,7 +588,7 @@ def patch_suspect(
     )
 
 @router.get(
-    "/investigator/cases/{case_id}/timeline",
+    "/{case_id}/timeline",
     response_model=CaseTimelineList,
     summary="List every timeline event for a case",
 )
@@ -569,7 +602,7 @@ def list_timeline(
 
 
 @router.post(
-    "/investigator/cases/{case_id}/timeline",
+    "/{case_id}/timeline",
     response_model=TimelineEventRow,
     status_code=201,
     summary="Add a manual timeline event",
@@ -585,7 +618,7 @@ def add_manual_event(
 
 
 @router.delete(
-    "/investigator/cases/{case_id}/timeline/{event_id}",
+    "/{case_id}/timeline/{event_id}",
     response_model=DeleteTimelineEventResult,
     summary="Delete a manual timeline event",
 )

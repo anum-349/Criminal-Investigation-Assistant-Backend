@@ -2,36 +2,6 @@ from typing import List, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, ConfigDict, Field
 
-class VictimPhotoOut(BaseModel):
-    """One photo attached to a victim row.
-    Field naming mirrors EvidencePhotoOut / SuspectPhotoOut."""
-    model_config = ConfigDict(from_attributes=True)
-
-    id:        int
-    url:       str                          
-    file_name: Optional[str] = None
-    caption:   Optional[str] = None
-
-
-class PhotoUploadRequest(BaseModel):
-    """Photo upload as a base-64 data URL (matches what FileReader produces)."""
-    dataUrl:  str
-    fileName: Optional[str] = None
-    caption:  Optional[str] = None
-
-
-class PhotoUploadResult(BaseModel):
-    photo:  VictimPhotoOut
-    photos: List[VictimPhotoOut]            # full updated list
-    photoUrl: Optional[str] = None          # convenience: new avatar URL
-
-
-class PhotoDeleteResult(BaseModel):
-    deleted_id: int
-    photos:     List[VictimPhotoOut]
-    photoUrl:   Optional[str] = None        # convenience: new avatar URL after delete
-
-
 class VictimPersonal(BaseModel):
     name:       Optional[str] = None
     age:        Optional[int] = None
@@ -112,9 +82,6 @@ class VictimDetail(BaseModel):
     injuryType: Optional[str] = None
 
     photoUrl:          Optional[str] = None
-
-    photos:            List[VictimPhotoOut] = []
-
 
 class CaseVictimsList(BaseModel):
     """GET /api/investigator/cases/{case_id}/victims response."""

@@ -57,3 +57,16 @@ class PreferencesPayload(BaseModel):
 
 class PreferencesResponse(BaseModel):
     preferences: Dict[str, bool]
+
+class PersonPhotoUploadRequest(BaseModel):
+    """Photo upload as a base-64 data URL (matches what FileReader produces)."""
+    dataUrl:  str
+    fileName: Optional[str] = None
+    caption:  Optional[str] = None
+
+class PersonPhotoUploadResult(BaseModel):
+    photoUrl: str  
+
+class PersonPhotoDeleteResult(BaseModel):
+    deleted: bool
+    photoUrl: Optional[str] = None
