@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import Request, HTTPException
 
 import os                                                        
-import db
-from models import EvidencePhoto                                  
+from models import EvidencePhoto, WitnessType                                  
+import logging
 
 from models import (
     User, Investigator, Person,
@@ -19,18 +19,20 @@ from models import (
     Evidence, EvidenceType, Lead,
     TimelineEvent, TimelineEventType,
 )
+from schemas.case_suspect_schema import SuspectInput
 from services import audit_service as audit
 from schemas.case_detail_schema import (
     AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse,
     TimelineEventOut, AddTimelineResult,
-    SuspectInput, EvidenceInput, VictimInput, WitnessInput,
+    EvidenceInput, VictimInput, WitnessInput,
 )
 from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _resolve_person, _resolve_case, _format_officer_name, _ymd
 
+log = logging.getLogger(__name__)
 
 def _short_id(prefix: str, case_id: str, count: int) -> str:
     short_case_id = case_id.split("-")[-1]
-    return f"{prefix}-{short_case_id}-T{count + 1:02d}"
+    return f"{prefix}-{short_case_id}-{count + 1:02d}"
 
 def _next_event_id(case_id: str, count: int) -> str:    return _short_id("EVN", case_id, count)
 def _next_suspect_id(case_id: str, count: int) -> str:  return _short_id("SUS", case_id, count)
@@ -38,6 +40,12 @@ def _next_victim_id(case_id: str, count: int) -> str:   return _short_id("VIC", 
 def _next_witness_id(case_id: str, count: int) -> str:  return _short_id("WIT", case_id, count)
 def _next_evidence_id(case_id: str, count: int) -> str: return _short_id("EVD", case_id, count)
 
+
+def _witness_type_id(db: Session, label: Optional[str]) -> Optional[int]:
+    if not label:
+        return None
+    row = db.query(WitnessType).filter(WitnessType.label == label).first()
+    return row.id if row else None
 
 def _severity_id_by_label(db: Session, label: Optional[str]) -> Optional[int]:
     if not label:
@@ -101,33 +109,44 @@ def _timeline_event_type_id(db: Session, code: str) -> Optional[int]:
     row = db.query(TimelineEventType).filter(TimelineEventType.code == code).first()
     return row.id if row else None
 
-def add_suspect(
-    db: Session,
-    *,
-    user: User,
-    case_id: str,
-    request: Optional[Request],
-    suspects: List[SuspectInput],
-) -> AddTimelineResult:
+def add_suspect(db: Session, *, user: User, case_id: str,
+                request: Optional[Request], suspects: List[SuspectInput]):
     case = _resolve_case(db, user=user, case_id=case_id)
-
-    created_ids: List[str] = []
-    timeline_out: List[TimelineEventOut] = []
+    created_ids, timeline_out = [], []
 
     try:
         for s in suspects:
-            person = _resolve_person(db, name=s.name, cnic=s.cnic, age=s.age, gender=s.gender)
+            person = _resolve_person(
+                db, name=s.name, cnic=s.cnic, age=s.age, gender=s.gender,
+                contact=s.contact, address=s.address, occupation=s.occupation,
+                physical_description= s.physicalDescription,
+            )
+
+            latest = (
+                db.query(CaseSuspect)
+                .filter(CaseSuspect.case_id_fk == case.id)
+                .order_by(CaseSuspect.id.desc())
+                .first()
+            )
+            last_num = 0
+            if latest:
+                try: last_num = int(latest.suspect_id.split("-")[-1])
+                except (ValueError, IndexError): pass
 
             row = CaseSuspect(
-                case_id_fk=case.id,
-                person_id=person.id,
-                suspect_id=s.suspectId or _next_suspect_id(case.case_id, count=len(case.suspects)),
-                status_id=_suspect_status_id(db, s.status),
-                relation_to_case=s.relationToCase,
-                reason=s.reason,
-                alibi=s.alibi,
-                criminal_record=bool(s.criminalRecord),
-                arrested=bool(s.arrested),
+                case_id_fk          = case.id,
+                person_id           = person.id,
+                suspect_id          = s.suspectId or _next_suspect_id(case.case_id, count=last_num + 1),
+                status_id           = _suspect_status_id(db, s.status),
+                relation_to_case    = s.relationToCase,
+                reason              = s.reason,
+                alibi               = s.alibi,
+                criminal_record     = bool(s.criminalRecord),
+                arrested            = bool(s.arrested),
+                known_affiliations  = s.knownAffiliations,
+                arrival_method      = s.arrivalMethod,
+                vehicle_description = s.vehicleDescription,
+                notes               = s.notes,
             )
             db.add(row)
             db.flush()
@@ -138,7 +157,7 @@ def add_suspect(
                 db, case=case, user=user, request=request,
                 system_event_code="SUSPECT_ADDED",
                 title=f"Suspect Added: {display}",
-                description=(s.reason or "New suspect record created."),
+                description=(s.reason or "New suspect record created.")[:120],
                 audit_target_type="suspect",
                 audit_target_id=row.suspect_id,
             )
@@ -146,14 +165,13 @@ def add_suspect(
 
         db.commit()
     except HTTPException:
+        db.rollback(); raise
+    except Exception:
         db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to add suspect: {e}")
+        log.exception("add_suspect failed")
+        raise HTTPException(status_code=500, detail="Failed to add suspect")
 
     return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
-
 
 def add_evidence(
     db: Session,
@@ -194,7 +212,7 @@ def add_evidence(
             )
 
             if latest:
-                last_num = int(latest.evidence_id.split("T")[-1])
+                last_num = int(latest.evidence_id.split("-")[-1])
             else:
                 last_num = 0
 
@@ -352,7 +370,7 @@ def add_victim(
 
     return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
-
+# services/case_detail_service.py  — replace add_witness
 def add_witness(
     db: Session,
     *,
@@ -363,18 +381,19 @@ def add_witness(
 ) -> AddTimelineResult:
     case = _resolve_case(db, user=user, case_id=case_id)
 
-    created_ids: List[str] = []
+    created_ids:  List[str]             = []
     timeline_out: List[TimelineEventOut] = []
 
     try:
         for w in witnesses:
             person = _resolve_person(
                 db,
-                name=None if w.anonymous else w.name,
-                cnic=None if w.anonymous else w.cnic,
-                age=w.age, gender=w.gender,
-                contact=None if w.anonymous else w.contact,
-                address=None if w.anonymous else w.address,
+                name    = None if w.anonymous else w.name,
+                cnic    = None if w.anonymous else w.cnic,
+                age     = w.age,
+                gender  = w.gender,
+                contact = None if w.anonymous else w.contact,
+                address = None if w.anonymous else w.address,
             )
 
             latest = (
@@ -383,53 +402,59 @@ def add_witness(
                 .order_by(CaseWitness.id.desc())
                 .first()
             )
-
+            last_num = 0
             if latest:
-                last_num = int(latest.witness_id.split("T")[-1])
-            else:
-                last_num = 0
-
-            next_num = last_num + 1
+                try:
+                    last_num = int(latest.witness_id.split("-")[-1])
+                except (ValueError, IndexError):
+                    last_num = 0
 
             row = CaseWitness(
-                case_id_fk=case.id,
-                person_id=person.id,
-                witness_id=w.witnessId or _next_witness_id(case.case_id, count=next_num),
-                credibility_id=_credibility_id(db, w.credibility),
-                relation_to_case=w.relationToCase,
-                description=w.description,
-                anonymous=bool(w.anonymous),
-                protection_required=bool(w.protection_required),
-                statement_recorded_by=_format_officer_name(user),
+                case_id_fk     = case.id,
+                person_id      = person.id,
+                witness_id     = _next_witness_id(case.case_id, count=last_num + 1),
+                credibility_id = _credibility_id(db, w.credibility),
+                witness_type_id= _witness_type_id(db, w.witnessType),
+                relation_to_case = w.relationToCase,
+                description    = w.description,
+                anonymous      = bool(w.anonymous),
+                protection_required = bool(w.protection_required),
+                # Use caller-supplied recorded_by; fall back to logged-in user
+                statement_recorded_by = (
+                    w.recorded_by.strip()
+                    if w.recorded_by and w.recorded_by.strip()
+                    else _format_officer_name(user)
+                ),
             )
             db.add(row)
             db.flush()
             created_ids.append(row.witness_id)
 
             display = "Anonymous witness" if w.anonymous else (w.name or "Unnamed witness")
-            stmt = w.description or ""
-            description = (stmt[:120] + "…") if len(stmt) > 120 else (stmt or "New witness statement attached to case.")
+            stmt    = w.description or ""
+            desc    = (stmt[:120] + "…") if len(stmt) > 120 else (stmt or "New witness statement attached to case.")
 
             ev = _log_action(
                 db, case=case, user=user, request=request,
-                system_event_code="WITNESS_ADDED",
-                title=f"Witness Statement Recorded: {display}",
-                description=description,
-                audit_target_type="witness",
-                audit_target_id=row.witness_id,
+                system_event_code = "WITNESS_ADDED",
+                title             = f"Witness Statement Recorded: {display}",
+                description       = desc,
+                audit_target_type = "witness",
+                audit_target_id   = row.witness_id,
             )
             timeline_out.append(_timeline_to_out(ev, case.case_id))
 
         db.commit()
+
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to add witness: {e}")
+        log.exception("add_witness failed")
+        raise HTTPException(status_code=500, detail="Failed to add witness")
 
     return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
-
 
 def _log_action(
     db: Session,
@@ -452,7 +477,7 @@ def _log_action(
     Returns the TimelineEvent so the caller can include it in the response
     payload (so the frontend doesn't need to re-fetch the timeline).
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     officer = _format_officer_name(user)
 
     ev = TimelineEvent(

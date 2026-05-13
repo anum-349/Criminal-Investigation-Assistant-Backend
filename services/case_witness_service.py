@@ -437,7 +437,7 @@ def update_witness(
 
     text_field_map = [
         ("relationToCase",      "relation_to_case"),
-        ("statementRecordedBy", "statement_recorded_by"),
+        ("recorded_by", "recorded_by"),
         ("description",         "description"),
         ("status",              "status"),
     ]

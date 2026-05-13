@@ -17,7 +17,7 @@ from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadReques
 from services import case_linked_service, case_location_service, case_victim_service as svc
 
 from schemas.all_cases_schema import AllCasesRow
-from schemas.case_detail_schema import AddEvidenceRequest, AddSuspectRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
+from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
 from schemas.case_evidence_schema import CaseEvidenceList, CaseEvidenceRow, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, UpdateEvidenceRequest
 from schemas.case_timeline_schema import AddTimelineEventRequest, CaseTimelineList, DeleteTimelineEventResult, TimelineEventRow
 from schemas.case_timeline_schema import CaseTimelineList
@@ -28,7 +28,7 @@ from schemas.case_lead_schema import (
     AddManualLeadRequest, UpdateLeadStatusRequest,
 )
 from schemas.case_suspect_schema import (
-        CaseSuspectsList, SuspectRow, UpdateSuspectRequest,
+        AddSuspectRequest, CaseSuspectsList, SuspectRow, UpdateSuspectRequest,
 )
 from schemas.search_schema import SearchResponse
 from services.all_cases_service import get_case_summary
@@ -36,7 +36,7 @@ from services.case_detail_service import add_evidence, add_suspect, add_victim, 
 from services.case_evidence_service import add_photo, delete_photo, get_evidence, list_evidences, update_evidence
 from services.search_service import search_all
 from services.case_lead_service import list_leads, add_manual_lead, update_lead_status, delete_lead
-from services.case_suspect_service import list_suspects, get_suspect, update_suspect
+from services.case_suspect_service import add_suspect_photo, delete_suspect_photo, list_suspects, get_suspect, update_suspect
 from services import case_timeline_service as stc
 from schemas.case_witness_schema import (
     CaseWitnessesList, WitnessRow,
@@ -585,6 +585,40 @@ def patch_suspect(
     return update_suspect(
         db, user=user, case_id=case_id, suspect_id=suspect_id,
         body=body, request=request,
+    )
+
+@router.post(
+    "/{case_id}/suspect/{suspect_id}/photo",
+    response_model=PersonPhotoUploadResult,
+)
+def add_witness_photo(
+    case_id: str,
+    suspect_id: str,
+    body: PersonPhotoUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+):
+    return add_suspect_photo(
+        db, user=user, case_id=case_id, suspect_id=suspect_id,
+        body=body, request=request,
+    )
+
+
+@router.delete(
+    "/{case_id}/suspect/{witness_id}/photo",
+    response_model=PersonPhotoDeleteResult,
+)
+def delete_witness_photo(
+    case_id: str,
+    suspect_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_investigator),
+):
+    return delete_suspect_photo(
+        db, user=user, case_id=case_id, suspect_id=suspect_id,
+        request=request,
     )
 
 @router.get(

@@ -12,6 +12,7 @@ from fastapi import HTTPException, Request
 from auth.jwt import create_access_token
 from models import User, UserPreference, UserRole, UserRolePermission, Permission, Investigator, Admin
 from services import audit_service as audit
+from services.service_helper import MAX_PHOTO_BYTES, UPLOADS_ROOT, UPLOADS_URL_PREFIX
 
 load_dotenv()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -19,10 +20,6 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 MAX_FAILED_LOGINS = int(os.getenv("MAX_FAILED_LOGINS", "5"))
 LOCKOUT_MINUTES   = int(os.getenv("LOCKOUT_MINUTES",   "15"))
 PASSWORD_MIN_LEN  = 8
-
-UPLOADS_ROOT       = os.getenv("UPLOADS_DIR", "uploads")
-UPLOADS_URL_PREFIX = os.getenv("UPLOADS_URL_PREFIX", "/uploads")
-MAX_PHOTO_BYTES    = int(os.getenv("MAX_PHOTO_BYTES", str(5 * 1024 * 1024)))  # 5 MB
 
 _DATA_URL_RE = re.compile(
     r"^data:(?P<mime>[\w/+\-.]+);base64,(?P<body>.+)$", re.DOTALL

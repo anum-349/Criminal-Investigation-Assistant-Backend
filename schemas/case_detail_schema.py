@@ -1,6 +1,12 @@
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+import re
+from typing import Optional
+from datetime import date
+
+CNIC_RE   = re.compile(r'^\d{5}-\d{7}-\d$')
+PHONE_RE  = re.compile(r'^(\+92|0)[-\s]?\d{3}[-\s]?\d{7}$')
 
 class CaseHeader(BaseModel):
     """The hero block at the top of the page."""
@@ -54,25 +60,6 @@ class CaseDetailResponse(BaseModel):
     stats:     CaseStats
     timeline:  List[TimelineEventOut]
 
-class SuspectInput(BaseModel):
-    """Mirror of one row from the AddSuspectDialog form."""
-    model_config = ConfigDict(extra="ignore")
-
-    suspectId:        Optional[str] = None
-    name:             Optional[str] = None
-    cnic:             Optional[str] = None
-    age:              Optional[int] = None
-    gender:           Optional[str] = None
-    status:           Optional[str] = None      # SuspectStatus.label, e.g. "At Large"
-    relationToCase:   Optional[str] = None
-    reason:           Optional[str] = None
-    alibi:            Optional[str] = None
-    criminalRecord:   Optional[bool] = False
-    arrested:         Optional[bool] = False
-
-class AddSuspectRequest(BaseModel):
-    suspects: List[SuspectInput]
-
 class EvidenceInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -110,21 +97,73 @@ class AddVictimRequest(BaseModel):
     victims: List[VictimInput]
 
 class WitnessInput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    witnessId:        Optional[str] = None
-    name:             Optional[str] = None
-    cnic:             Optional[str] = None
-    age:              Optional[int] = None
-    gender:           Optional[str] = None
-    contact:          Optional[str] = None
-    address:          Optional[str] = None
-    relationToCase:   Optional[str] = None
-    credibility:      Optional[str] = None      # WitnessCredibility.label
-    description:      Optional[str] = None      # statement
-    anonymous:        Optional[bool] = False
+    witnessId:           Optional[str]  = None
+    name:                Optional[str]  = None
+    cnic:                Optional[str]  = None
+    age:                 Optional[int]  = None
+    gender:              Optional[str]  = None
+    contact:             Optional[str]  = None
+    address:             Optional[str]  = None
+    relationToCase:      Optional[str]  = None
+    credibility:         Optional[str]  = None
+    description:         Optional[str]  = None
+    recorded_by:         Optional[str]  = None        # ← honour caller value
+    witnessType:         Optional[str]  = None
+    statementDate:       Optional[str]  = None        # YYYY-MM-DD
+    anonymous:           Optional[bool] = False
     protection_required: Optional[bool] = Field(default=False, alias="protectionRequired")
 
+    # ── field validators ──────────────────────────────────────────────
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v):
+        if v is not None and v.strip() == "":
+            raise ValueError("Name cannot be blank")
+        return v
+
+    @field_validator("cnic")
+    @classmethod
+    def cnic_format(cls, v):
+        if v and not CNIC_RE.match(v.strip()):
+            raise ValueError("CNIC must be in format 00000-0000000-0")
+        return v
+
+    @field_validator("contact")
+    @classmethod
+    def contact_format(cls, v):
+        if v and not PHONE_RE.match(v.strip()):
+            raise ValueError("Contact must be a valid Pakistani number, e.g. 0300-1234567")
+        return v
+
+    @field_validator("age")
+    @classmethod
+    def age_min(cls, v):
+        if v is not None and v < 7:
+            raise ValueError("Witness age must be at least 7 years")
+        if v is not None and v > 120:
+            raise ValueError("Age must be 120 or less")
+        return v
+
+    @field_validator("statementDate")
+    @classmethod
+    def statement_date_not_future(cls, v):
+        if v:
+            try:
+                d = date.fromisoformat(v)
+            except ValueError:
+                raise ValueError("statementDate must be YYYY-MM-DD")
+            if d > date.today():
+                raise ValueError("Statement date cannot be in the future")
+        return v
+
+    @model_validator(mode="after")
+    def non_anon_requires_name(self):
+        if not self.anonymous and not (self.name or "").strip():
+            raise ValueError("Name is required for non-anonymous witnesses")
+        return self
+    
 class AddWitnessRequest(BaseModel):
     witnesses: List[WitnessInput]
 

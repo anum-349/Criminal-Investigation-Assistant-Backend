@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
-from routes import case_routes, investigator_route, main_route, user_route
+from routes import analytics_routes, case_routes, investigator_route, main_route, report_routes, ticket_routes, user_route
 
 load_dotenv()
 
@@ -69,7 +69,9 @@ app.include_router(user_route.router, prefix="/api/auth", tags=["Authentication"
 app.include_router(main_route.router, prefix="/api",      tags=["Dashboard"])
 app.include_router(investigator_route.router, prefix="/api",      tags=["Investigator Dashboard"])
 app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
-
+app.include_router(ticket_routes.router, prefix="/api/tickets", tags=["Tickets"])
+app.include_router(report_routes.router, prefix="/api/reports", tags=["Reports"])
+app.include_router(analytics_routes.router, prefix="/api/analytics", tags=["Analytics"])
 @app.get("/", tags=["Meta"])
 def root():
     return {

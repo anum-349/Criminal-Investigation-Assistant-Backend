@@ -114,6 +114,8 @@ def _resolve_person(
     gender: Optional[str] = None,
     contact: Optional[str] = None,
     address: Optional[str] = None,
+    occupation: Optional[str] = None,
+    physical_description: Optional[str] = None 
 ) -> Person:
     """
     Find an existing Person by CNIC, otherwise create one. CNIC is the
@@ -138,6 +140,8 @@ def _resolve_person(
         gender=gender,
         contact=contact,
         address=address,
+        occupation=occupation,
+        physical_description=physical_description,
         is_unknown=not bool(name),
     )
     db.add(person)

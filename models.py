@@ -146,6 +146,15 @@ class Permission(Base):
     description = Column(String(255), nullable=True)
     module      = Column(String(40), nullable=False)
 
+class TicketStatus(Base):
+    __tablename__ = "lkp_ticket_statuses"
+
+    id         = Column(Integer, primary_key=True)
+    code       = Column(String(40), unique=True, nullable=False)  # OPEN / IN_PROGRESS / RESOLVED / CLOSED
+    label      = Column(String(80), nullable=False)
+    sort_order = Column(Integer, default=0)
+    active     = Column(Boolean, default=True)
+
 # SECTION 2 — USERS & ROLES
 class User(Base):
     __tablename__ = "users"
@@ -1373,3 +1382,79 @@ class GeneratedReport(Base):
 
     case         = relationship("Case")
     generated_by = relationship("User")
+
+
+class Ticket(Base):
+    """
+    A message sent by any user to an admin via the Contact Administrator modal.
+    Admins can reply and change status; the sender sees replies in notifications.
+    """
+    __tablename__ = "tickets"
+
+    id        = Column(Integer, primary_key=True)
+    ticket_id = Column(String(50), unique=True, index=True, nullable=False)
+    # e.g. "TKT-20260513-001"
+
+    # Who sent it
+    sender_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Priority: normal / urgent / critical
+    priority  = Column(String(20), default="normal", nullable=False)
+
+    subject   = Column(String(255), nullable=False)
+    message   = Column(Text, nullable=False)
+
+    status_id = Column(
+        Integer,
+        ForeignKey("lkp_ticket_statuses.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    # Admin who picked it up (nullable until assigned)
+    assigned_to_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    admin_notes  = Column(Text, nullable=True)   # internal admin note
+    resolved_at  = Column(DateTime, nullable=True)
+
+    created_at   = Column(DateTime, default=datetime.now(UTC))
+    updated_at   = Column(DateTime, default=datetime.now(UTC), onupdate=datetime.now(UTC))
+
+    sender      = relationship("User", foreign_keys=[sender_id])
+    assigned_to = relationship("User", foreign_keys=[assigned_to_id])
+    status      = relationship("TicketStatus")
+    replies     = relationship(
+        "TicketReply", back_populates="ticket",
+        cascade="all, delete-orphan", passive_deletes=True,
+        order_by="TicketReply.created_at",
+    )
+
+
+class TicketReply(Base):
+    """Admin (or sender) reply thread on a ticket."""
+    __tablename__ = "ticket_replies"
+
+    id        = Column(Integer, primary_key=True)
+    ticket_id = Column(
+        Integer,
+        ForeignKey("tickets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    body       = Column(Text, nullable=False)
+    is_admin   = Column(Boolean, default=False)   # True = written by admin
+    created_at = Column(DateTime, default=datetime.now(UTC))
+
+    ticket = relationship("Ticket", back_populates="replies")
+    author = relationship("User")

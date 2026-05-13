@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import UTC, datetime
 from typing import Optional, List
@@ -7,16 +8,17 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException, Request
 
 from models import (
-    User, Person, Case,
+    PersonPhoto, User, Person, Case,
     CaseSuspect, SuspectStatus,
     Severity, Activity,
     TimelineEvent, TimelineEventType,
 )
+from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
 from services import audit_service as audit
 from schemas.case_suspect_schema import (
     SuspectRow, CaseSuspectsList, UpdateSuspectRequest,
 )
-from services.service_helper import _format_officer_name, _resolve_case
+from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _format_officer_name, _public_url, _resolve_case
 
 def _resolve_suspect(db: Session, *, case: Case, suspect_id: str) -> CaseSuspect:
     row = (
@@ -64,6 +66,9 @@ def _ymd(d) -> str:
 
 def _row_from_suspect(s: CaseSuspect) -> SuspectRow:
     p = s.person
+    photo_url = None
+    if p and p.photo:                         
+        photo_url = _public_url(p.photo.file_path) 
     return SuspectRow(
         id=s.suspect_id,
         caseId=s.case.case_id if s.case else "",
@@ -81,12 +86,13 @@ def _row_from_suspect(s: CaseSuspect) -> SuspectRow:
         arrested=bool(s.arrested),
         criminalRecord=bool(s.criminal_record),
         dateAdded=_ymd(s.created_at) if hasattr(s, "created_at") and s.created_at else None,
-        statementDate=None,
-        physicalDescription=None,
-        knownAffiliations=None,
-        arrivalMethod=None,
-        vehicleDescription=None,
-        notes=None,
+        statementDate=_ymd(s.created_at) if hasattr(s, "created_at") and s.created_at else None,
+        physicalDescription=p.physical_description,
+        knownAffiliations=s.known_affiliations,
+        arrivalMethod=s.arrival_method,
+        vehicleDescription=s.vehicle_description,
+        notes=s.notes,
+        photoUrl=photo_url
     )
 
 
@@ -124,6 +130,78 @@ def _log_suspect_action(
         )
     except Exception:
         pass
+
+def _save_suspect_photo(raw: bytes, mime: str, *, case_id: str,
+                        suspect_id: str, original_name: Optional[str]) -> str:
+    folder = os.path.join(UPLOADS_ROOT, "suspects", case_id, suspect_id)
+    os.makedirs(folder, exist_ok=True)
+    ext = _ext_for_mime(mime, original_name)
+    fname = f"{secrets.token_hex(8)}{ext}"
+    abs_path = os.path.join(folder, fname)
+    with open(abs_path, "wb") as f:
+        f.write(raw)
+    return abs_path
+
+
+def add_suspect_photo(db: Session, *, user: User, case_id: str,
+                      suspect_id: str, body, request: Optional[Request]):
+    case    = _resolve_case(db, user=user, case_id=case_id)
+    suspect = _resolve_suspect(db, case=case, suspect_id=suspect_id)
+    person  = suspect.person
+
+    raw, mime = _decode_data_url(body.dataUrl, image_only=True)
+
+    existing = db.query(PersonPhoto).filter(PersonPhoto.person_id == person.id).first()
+    if existing:
+        try: os.remove(existing.file_path)
+        except Exception: pass
+        db.delete(existing)
+        db.flush()
+
+    abs_path = _save_suspect_photo(raw, mime, case_id=case_id,
+                                   suspect_id=suspect_id, original_name=body.fileName)
+    photo = PersonPhoto(
+        person_id=person.id, file_path=abs_path,
+        file_name=body.fileName or os.path.basename(abs_path),
+        file_mime=mime, file_size=len(raw),
+    )
+    db.add(photo)
+    try:
+        db.flush()
+        _log_suspect_action(db, case=case, user=user, request=request,
+            title=f"Photo Updated: {suspect.suspect_id}",
+            description=f"Photo '{photo.file_name}' attached.",
+            audit_action="UPDATE", audit_target_id=suspect.suspect_id)
+        db.commit()
+    except Exception as ex:
+        db.rollback()
+        try: os.remove(abs_path)
+        except Exception: pass
+        raise HTTPException(status_code=500, detail=f"Photo upload failed: {ex}")
+    return PersonPhotoUploadResult(photoUrl=_public_url(abs_path))
+
+
+def delete_suspect_photo(db: Session, *, user: User, case_id: str,
+                         suspect_id: str, request: Optional[Request]):
+    case    = _resolve_case(db, user=user, case_id=case_id)
+    suspect = _resolve_suspect(db, case=case, suspect_id=suspect_id)
+    photo   = db.query(PersonPhoto).filter(
+                  PersonPhoto.person_id == suspect.person.id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="No photo found")
+    file_path = photo.file_path
+    db.delete(photo)
+    try:
+        _log_suspect_action(db, case=case, user=user, request=request,
+            title=f"Photo Removed: {suspect.suspect_id}", description="Photo deleted.",
+            audit_action="UPDATE", audit_target_id=suspect.suspect_id)
+        db.commit()
+    except Exception as ex:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Photo delete failed: {ex}")
+    try: os.remove(file_path)
+    except Exception: pass
+    return PersonPhotoDeleteResult(deleted=True, photoUrl=None)
 
 def list_suspects(
     db: Session,

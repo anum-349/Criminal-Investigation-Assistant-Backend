@@ -73,7 +73,7 @@ class UpdateWitnessRequest(BaseModel):
 
     # Statement
     statementDate:        Optional[str] = None  # YYYY-MM-DD
-    statementRecordedBy:  Optional[str] = None
+    recorded_by:  Optional[str] = None
     description:          Optional[str] = None
 
     # Status & flags
