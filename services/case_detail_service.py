@@ -1,5 +1,5 @@
-from __future__ import annotations
 from datetime import UTC, datetime, date
+import re
 from typing import List, Optional
 import secrets
 
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import status, Request, HTTPException
 
 import os                                                        
-from models import AuditLog, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, EvidencePhoto, WitnessType                                  
+from models import AuditLog, CaseDraft, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, EvidencePhoto, WitnessType                                  
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,7 @@ from models import (
 from schemas.case_suspect_schema import SuspectInput
 from services import audit_service as audit
 from schemas.case_detail_schema import (
-    AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse,
+    AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse, DeleteDraftResponse, DraftDetailResponse, DraftListResponse, DraftSummary, SaveDraftRequest,
     TimelineEventOut, AddTimelineResult,
     EvidenceInput, UpdateCaseStatusResponse, VictimInput, WitnessInput,
 )
@@ -764,3 +764,208 @@ def update_case_status(
         update_note_id = update_note.id,
         updated_at     = now,
     )
+
+_DRAFT_ID_RE = re.compile(r"^DR-(\d+)$")
+
+
+def _next_draft_id(db: Session) -> str:
+    """Return the next "DR-NNNN". First issued id is DR-0001."""
+    rows = db.query(CaseDraft.draft_id).all()
+    max_num = 0
+    for (did,) in rows:
+        m = _DRAFT_ID_RE.match(did or "")
+        if m:
+            n = int(m.group(1))
+            if n > max_num:
+                max_num = n
+    return f"DR-{max_num + 1:04d}"
+
+
+def _resolve_owned_draft(db: Session, *, user: User, draft_id: str) -> CaseDraft:
+    """Find a draft by external id, scoped to the current user.
+
+    Other people's drafts → 404, not 403. We don't reveal existence.
+    """
+    row = (
+        db.query(CaseDraft)
+        .filter(CaseDraft.draft_id == draft_id, CaseDraft.user_id == user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Draft '{draft_id}' not found")
+    return row
+
+
+def _derive_title(body: SaveDraftRequest) -> str:
+    """Best-effort title for the Drafts list. Order of preference:
+       caller-provided → formData.caseTitle → formData.firNumber → fallback."""
+    if body.title and body.title.strip():
+        return body.title.strip()[:255]
+    fd = body.formData or {}
+    if isinstance(fd, dict):
+        for key in ("caseTitle", "firNumber", "fir_number"):
+            v = fd.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()[:255]
+    return "Untitled draft"
+
+
+def _compute_progress(form_data: dict) -> int:
+    """Rough percent-complete for the drafts list.
+
+    Mirrors the wizard's required-field set so the bar is meaningful:
+      Step 1 (FIR upload or manual flag)           : 10%
+      Step 2 (case details required fields)        : 30%
+      Step 3 (location required fields)            : 20%
+      Step 6 (crime description)                   : 20%
+      Step 4/5/7/8 (optional rows)                 : 20% (any one filled)
+
+    We deliberately leave Step 9 (AI Analysis) and Step 10 (Review) out —
+    those are read-only and shouldn't move the bar.
+    """
+    if not isinstance(form_data, dict):
+        return 0
+    pct = 0
+
+    if form_data.get("firFileName") or form_data.get("manualEntry"):
+        pct += 10
+
+    step2_keys = (
+        "firNumber", "caseTitle", "caseType", "priority",
+        "description", "incidentDate", "reportingDate",
+    )
+    if all(form_data.get(k) for k in step2_keys):
+        pct += 30
+
+    loc_ok = all(form_data.get(k) for k in ("province", "city", "address"))
+    if loc_ok:
+        pct += 20
+
+    if form_data.get("crimeDescription"):
+        pct += 20
+
+    has_children = any(
+        isinstance(form_data.get(k), list) and len(form_data[k]) > 0
+        for k in ("victims", "suspects", "witnesses", "evidences")
+    )
+    if has_children:
+        pct += 20
+
+    return min(100, pct)
+
+
+def _summary_from_row(row: CaseDraft) -> DraftSummary:
+    fd = row.form_data or {}
+    return DraftSummary(
+        draftId=row.draft_id,
+        title=row.title or "Untitled draft",
+        caseType=fd.get("caseType") if isinstance(fd, dict) else None,
+        firNumber=fd.get("firNumber") if isinstance(fd, dict) else None,
+        updatedAt=row.updated_at or row.created_at,
+        progressPercent=_compute_progress(fd if isinstance(fd, dict) else {}),
+    )
+
+
+def _detail_from_row(row: CaseDraft) -> DraftDetailResponse:
+    return DraftDetailResponse(
+        draftId=row.draft_id,
+        title=row.title or "Untitled draft",
+        formData=row.form_data or {},
+        updatedAt=row.updated_at or row.created_at,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Public — save_draft
+# ──────────────────────────────────────────────────────────────────────────
+
+def save_draft(
+    db: Session,
+    *,
+    user: User,
+    body: SaveDraftRequest,
+) -> DraftDetailResponse:
+    """Create a new draft, or update an existing one in place.
+
+    If `body.draftId` is supplied and belongs to the caller, that row is
+    updated. Otherwise a fresh draft is created and its new id returned.
+    The frontend stashes the returned id so subsequent autosaves hit the
+    same row instead of multiplying drafts.
+    """
+    title = _derive_title(body)
+    form_data = body.formData if isinstance(body.formData, dict) else {}
+
+    # ── Update path ─────────────────────────────────────────────────────
+    if body.draftId:
+        existing = (
+            db.query(CaseDraft)
+            .filter(CaseDraft.draft_id == body.draftId, CaseDraft.user_id == user.id)
+            .first()
+        )
+        if existing:
+            existing.title = title
+            existing.form_data = form_data
+            # updated_at is auto-bumped via the onupdate handler in the model.
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                log.exception("save_draft (update) failed")
+                raise HTTPException(status_code=500, detail="Could not save draft")
+            db.refresh(existing)
+            return _detail_from_row(existing)
+        # else fall through to create — frontend passed a stale id (draft
+        # was deleted from another tab, etc.). Creating a new row is the
+        # least surprising behaviour.
+
+    # ── Create path ─────────────────────────────────────────────────────
+    # Retry once on the unique-constraint race. Two concurrent saves from
+    # the same user are very unlikely, but defensive code is cheap here.
+    last_err = None
+    for _attempt in range(2):
+        new_id = _next_draft_id(db)
+        row = CaseDraft(
+            draft_id=new_id,
+            user_id=user.id,
+            title=title,
+            form_data=form_data,
+        )
+        try:
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return _detail_from_row(row)
+        except Exception as e:
+            db.rollback()
+            last_err = e
+            msg = str(e).lower()
+            if "unique" not in msg and "duplicate" not in msg:
+                break
+
+    log.exception("save_draft (create) failed: %s", last_err)
+    raise HTTPException(status_code=500, detail="Could not save draft")
+
+def list_drafts(db: Session, *, user: User) -> DraftListResponse:
+    """Return the caller's drafts, newest first."""
+    rows = (
+        db.query(CaseDraft)
+        .filter(CaseDraft.user_id == user.id)
+        .order_by(CaseDraft.updated_at.desc(), CaseDraft.id.desc())
+        .all()
+    )
+    return DraftListResponse(items=[_summary_from_row(r) for r in rows])
+
+def get_draft(db: Session, *, user: User, draft_id: str) -> DraftDetailResponse:
+    row = _resolve_owned_draft(db, user=user, draft_id=draft_id)
+    return _detail_from_row(row)
+
+def delete_draft(db: Session, *, user: User, draft_id: str) -> DeleteDraftResponse:
+    row = _resolve_owned_draft(db, user=user, draft_id=draft_id)
+    try:
+        db.delete(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception("delete_draft failed")
+        raise HTTPException(status_code=500, detail="Could not delete draft")
+    return DeleteDraftResponse(deleted=True, draftId=draft_id)

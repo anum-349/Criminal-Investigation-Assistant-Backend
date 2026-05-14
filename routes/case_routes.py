@@ -1,15 +1,12 @@
-from __future__ import annotations
-from datetime import UTC, date, datetime
+from datetime import UTC, date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from dependencies.auth import get_current_investigator, get_current_user
-from models import AuditLog, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, User
+from models import User
 from schemas.case_linked_schema import CaseLinkedCasesList
 from schemas.case_location_schema import CaseLocationResponse
 from schemas.case_register_schema import CaseRegisterRequest, CaseRegisterResponse, FIRFileUploadRequest, FIRFileUploadResult
@@ -21,11 +18,10 @@ from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadReques
 from services import case_linked_service, case_location_service, case_register_service, case_victim_service as svc
 
 from schemas.all_cases_schema import AllCasesRow
-from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse, CaseStatusOut, UpdateCaseStatusRequest, UpdateCaseStatusResponse
+from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse, UpdateCaseStatusRequest, UpdateCaseStatusResponse
 from schemas.case_evidence_schema import CaseEvidenceList, CaseEvidenceRow, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, UpdateEvidenceRequest
 from schemas.case_timeline_schema import AddTimelineEventRequest, CaseTimelineList, DeleteTimelineEventResult, TimelineEventRow
 from schemas.case_timeline_schema import CaseTimelineList
-
 
 from schemas.case_lead_schema import (
     CaseLeadsList, LeadRow, DeleteLeadResult,
@@ -49,6 +45,43 @@ from schemas.case_witness_schema import (
 from services import case_witness_service as swc
 
 router = APIRouter()
+
+
+@router.post(
+    "/register",
+    response_model=CaseRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new case (FIR + case details + location + crime details).",
+)
+def register_case_endpoint(
+    body: CaseRegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> CaseRegisterResponse:
+    """Frontend entry point used by RegisterCasePage.handleSubmit."""
+    return case_register_service.register_case(
+        db,
+        user=user,
+        body=body,
+        request=request,
+    )
+ 
+
+@router.get("/search", response_model=SearchResponse)
+def global_search(
+    request: Request,
+    q: str = Query("", description="Free-text search query (empty = recent items)"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Unified search across cases, suspects, victims, witnesses, leads, and
+    locations. Returns up to 50 rows per category. Investigators see only
+    items from cases they're assigned to; admins see everything. Every
+    search writes a SEARCH row to audit_logs (R3.2.1.1.5).
+    """
+    return search_all(db, user=user, q=q, request=request)
 
 @router.get(
     "/{case_id}/victims",
@@ -78,7 +111,6 @@ def get_victim(
     return svc.get_victim(
         db, user=user, case_id=case_id, victim_id=victim_id, request=request,
     )
-
 
 @router.patch(
     "/{case_id}/victims/{victim_id}",
@@ -119,7 +151,6 @@ def list_witnesses(
         search=search, status_filter=status, date_filter=date,
         page=page, page_size=page_size,
     )
-
 
 @router.get(
     "/{case_id}/witnesses/{witness_id}",
@@ -306,21 +337,6 @@ def get_case_row_summary(
     if row is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return row
-
-@router.get("/search", response_model=SearchResponse)
-def global_search(
-    request: Request,
-    q: str = Query("", description="Free-text search query (empty = recent items)"),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """
-    Unified search across cases, suspects, victims, witnesses, leads, and
-    locations. Returns up to 50 rows per category. Investigators see only
-    items from cases they're assigned to; admins see everything. Every
-    search writes a SEARCH row to audit_logs (R3.2.1.1.5).
-    """
-    return search_all(db, user=user, q=q, request=request)
 
 @router.get("/{case_id}", response_model=CaseDetailResponse)
 def get_case(
@@ -652,7 +668,6 @@ def add_manual_event(
 ) -> TimelineEventRow:
     return stc.add_manual_event(db, user=user, case_id=case_id, body=body, request=request)
 
-
 @router.delete(
     "/{case_id}/timeline/{event_id}",
     response_model=DeleteTimelineEventResult,
@@ -669,35 +684,26 @@ def delete_manual_event(
         db, user=user, case_id=case_id, event_id=event_id, request=request,
     )
 
-@router.post(
-    "",
-    response_model=CaseRegisterResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register a new case (FIR + case details + location + crime details).",
+@router.patch(
+    "/{case_id}/fir-file",
+    response_model=FIRFileUploadResult,
+    summary="Attach (or replace) the FIR file for an existing case.",
 )
-def register_case_endpoint(
-    body: CaseRegisterRequest,
+def upload_fir_file_endpoint(
+    case_id: str,
+    body: FIRFileUploadRequest,
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> CaseRegisterResponse:
-    """Frontend entry point used by RegisterCasePage.handleSubmit.
-
-    On success returns 201 with `{ case_id, fir_number, timeline_events }`.
-    The frontend then runs its child-entity calls (victims/suspects/etc.)
-    against `case_id` — see src/services/caseApi.js → registerCaseFull.
-    """
-    return case_register_service.register_case(
+) -> FIRFileUploadResult:
+    return case_register_service.upload_fir_file(
         db,
         user=user,
+        case_id=case_id,
         body=body,
         request=request,
     )
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# PATCH /api/investigator/cases/{case_id}/fir-file
-# ──────────────────────────────────────────────────────────────────────────
+ 
 @router.patch(
     "/{case_id}/fir-file",
     response_model=FIRFileUploadResult,

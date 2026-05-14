@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
-from routes import analytics_routes, case_routes, investigator_route, main_route, notification_routes, report_routes, ticket_routes, user_route
+from routes import analytics_routes, case_routes, drafts_routes, investigator_route, lookup_routes, main_route, notification_routes, report_routes, ticket_routes, user_route
 
 load_dotenv()
 
@@ -68,11 +68,14 @@ app.add_middleware(
 app.include_router(user_route.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(main_route.router, prefix="/api",      tags=["Dashboard"])
 app.include_router(investigator_route.router, prefix="/api",      tags=["Investigator Dashboard"])
-app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
 app.include_router(ticket_routes.router, prefix="/api/tickets", tags=["Tickets"])
 app.include_router(report_routes.router, prefix="/api/reports", tags=["Reports"])
 app.include_router(analytics_routes.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(notification_routes.router, prefix="/api/notifications", tags=["Notifications"])
+app.include_router(drafts_routes.router, prefix="/api/investigator/cases/case-drafts", tags=["CaseDrafts"])
+app.include_router(lookup_routes.router, prefix="/api/investigator/lookups",      tags=["Lookups"])
+
+app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
 
 @app.get("/", tags=["Meta"])
 def root():

@@ -32,6 +32,8 @@ from services.service_helper import (
     UPLOADS_URL_PREFIX,
 )
 
+from services import notification_service as notif
+
 import os
 import secrets
 
@@ -203,7 +205,7 @@ def _next_case_id(db: Session) -> str:
     )
     last_num = 0
     if latest:
-        try: last_num = int(latest.suspect_id.split("-")[-1])
+        try: last_num = int(latest.case_id.split("-")[-1])
         except (ValueError, IndexError): pass
     
     last_num = last_num + 1
@@ -322,6 +324,19 @@ def _log_registration(
     except Exception:
         log.exception("audit.log_event failed during register_case")
 
+    try:
+        notif.push(
+            db,
+            user_id=user.id,
+            type="CASE_UPDATE",
+            title=f"Case Registered: {case.case_id}",
+            message=f"{case.case_title} (FIR {case.fir_number}) is now in your active caseload.",
+            link_url=f"/investigator/case/{case.case_id}",
+            related_case_id=case.id,
+            severity_label=(case.priority.label if case.priority else "Normal"),
+        )
+    except Exception:
+        log.exception("notification push failed during register_case")
     return ev
 
 

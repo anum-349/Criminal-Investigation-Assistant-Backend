@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 import re
@@ -199,3 +197,53 @@ class UpdateCaseStatusResponse(BaseModel):
     new_status:     str
     update_note_id: Optional[int]
     updated_at:     datetime
+
+
+class SaveDraftRequest(BaseModel):
+    """POST /api/investigator/case-drafts body.
+
+    `draftId` optional — pass it back from a previous response to update
+    the same row, omit it to create a fresh draft. The server enforces
+    user-scoping (you can't update someone else's draftId).
+
+    `title` optional — server derives one from formData.caseTitle /
+    formData.firNumber / "Untitled draft" when this is blank.
+
+    `formData` is whatever the wizard sends. We persist it as-is in a
+    JSON column so frontend additions don't require schema migrations.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    draftId:  Optional[str]            = None
+    title:    Optional[str]            = None
+    formData: Dict[str, Any]           = Field(default_factory=dict)
+
+
+class DraftSummary(BaseModel):
+    """One row in the drafts list. Just enough to render the card —
+    full formData is fetched only when the user clicks Resume."""
+    model_config = ConfigDict(from_attributes=True)
+
+    draftId:         str
+    title:           str
+    caseType:        Optional[str] = None      # extracted from formData.caseType
+    firNumber:       Optional[str] = None      # extracted from formData.firNumber
+    updatedAt:       datetime
+    progressPercent: int           = 0         # server-computed from which steps are filled
+
+
+class DraftListResponse(BaseModel):
+    items: List[DraftSummary]
+
+class DraftDetailResponse(BaseModel):
+    """Full draft payload — what the wizard hydrates from on Resume."""
+    model_config = ConfigDict(from_attributes=True)
+
+    draftId:   str
+    title:     str
+    formData:  Dict[str, Any]
+    updatedAt: datetime
+
+class DeleteDraftResponse(BaseModel):
+    deleted: bool
+    draftId: str
