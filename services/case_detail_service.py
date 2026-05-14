@@ -1,14 +1,16 @@
+from __future__ import annotations
 from datetime import UTC, datetime, date
 from typing import List, Optional
 import secrets
 
-from sqlalchemy import case, desc
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
-from fastapi import Request, HTTPException
+from fastapi import status, Request, HTTPException
 
 import os                                                        
-from models import EvidencePhoto, WitnessType                                  
+from models import AuditLog, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, EvidencePhoto, WitnessType                                  
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     User, Investigator, Person,
@@ -24,7 +26,7 @@ from services import audit_service as audit
 from schemas.case_detail_schema import (
     AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse,
     TimelineEventOut, AddTimelineResult,
-    EvidenceInput, VictimInput, WitnessInput,
+    EvidenceInput, UpdateCaseStatusResponse, VictimInput, WitnessInput,
 )
 from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _resolve_person, _resolve_case, _format_officer_name, _ymd
 
@@ -136,7 +138,7 @@ def add_suspect(db: Session, *, user: User, case_id: str,
             row = CaseSuspect(
                 case_id_fk          = case.id,
                 person_id           = person.id,
-                suspect_id          = s.suspectId or _next_suspect_id(case.case_id, count=last_num + 1),
+                suspect_id          = _next_suspect_id(case.case_id, count=last_num + 1),
                 status_id           = _suspect_status_id(db, s.status),
                 relation_to_case    = s.relationToCase,
                 reason              = s.reason,
@@ -644,3 +646,121 @@ def get_case_detail(
         db.rollback()
 
     return CaseDetailResponse(header=header, stats=stats, timeline=timeline)
+
+
+def _resolve_new_status(db: Session, *, status_code: str) -> CaseStatus:
+    row = (
+        db.query(CaseStatus)
+        .filter(CaseStatus.code == status_code, CaseStatus.active.is_(True))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Case status code='{status_code}' does not exist or is inactive.",
+        )
+    return row
+
+
+def _resolve_old_status(db: Session, *, status_id: Optional[int]) -> Optional[CaseStatus]:
+    if status_id is None:
+        return None
+    return db.query(CaseStatus).filter(CaseStatus.id == status_id).first()
+
+
+def _check_authorised(case: Case, user: User) -> None:
+    if user.role in ("admin", "superadmin"):
+        return
+    if case.assigned_investigator_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not assigned to this case.",
+        )
+
+
+def _check_not_terminal(old_status: Optional[CaseStatus]) -> None:
+    if old_status and old_status.is_terminal:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Case is already in terminal status '{old_status.label}' "
+                "and cannot be changed. Contact an administrator to re-open it."
+            ),
+        )
+
+
+def _check_not_same(case: Case, new_status_id: int, new_label: str) -> None:
+    if case.case_status_id == new_status_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Case is already in status '{new_label}'.",
+        )
+
+
+# ── Public service function ──────────────────────────────────────────────────
+def update_case_status(
+    db: Session,
+    *,
+    user: User,
+    case_id: str,
+    status_code: str,          # ← was status_id: int
+    note: Optional[str],
+    request: Optional[Request],
+) -> UpdateCaseStatusResponse:
+
+    case = _resolve_case(db, user=user, case_id=case_id)
+    _check_authorised(case, user)
+
+    old_status = _resolve_old_status(db, status_id=case.case_status_id)
+    new_status = _resolve_new_status(db, status_code=status_code)  # ← code-based lookup
+    old_label  = old_status.label if old_status else "None"
+
+    _check_not_terminal(old_status)
+    _check_not_same(case, new_status.id, new_status.label)  # ← use resolved PK here
+
+    now = datetime.now(UTC)
+    case.case_status_id = new_status.id                     # ← assign resolved PK
+    case.updated_at     = now
+    if new_status.is_terminal:
+        case.closed_at = now
+
+    note_text   = note or f"Status changed to '{new_status.label}'."
+    update_note = CaseUpdateNote(
+        case_id_fk = case.id,
+        user_id    = user.id,
+        note       = note_text,
+        created_at = now,
+    )
+    db.add(update_note)
+    db.flush()
+
+    db.add(CaseUpdateFieldChange(
+        update_note_id = update_note.id,
+        field_name     = "case_status_id",
+        old_value      = f"{old_status.id if old_status else None} ({old_label})",
+        new_value      = f"{new_status.id} ({new_status.label})",
+    ))
+
+    try:
+        audit.log_event(
+            db,
+            user_id     = user.id,
+            action      = "UPDATE",
+            module      = "Case Management",
+            detail      = f"Status updated: '{old_label}' → '{new_status.label}' on case {case.case_id}.",
+            target_type = "case",
+            target_id   = case.case_id,
+            request     = request,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return UpdateCaseStatusResponse(
+        case_id        = case.case_id,
+        old_status     = old_label,
+        new_status     = new_status.label,
+        update_note_id = update_note.id,
+        updated_at     = now,
+    )

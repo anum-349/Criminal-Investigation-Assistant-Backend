@@ -1,12 +1,15 @@
-from datetime import date
+from __future__ import annotations
+from datetime import UTC, date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from dependencies.auth import get_current_investigator, get_current_user
-from models import User
+from models import AuditLog, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, User
 from schemas.case_linked_schema import CaseLinkedCasesList
 from schemas.case_location_schema import CaseLocationResponse
 from schemas.case_register_schema import CaseRegisterRequest, CaseRegisterResponse, FIRFileUploadRequest, FIRFileUploadResult
@@ -18,7 +21,7 @@ from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadReques
 from services import case_linked_service, case_location_service, case_register_service, case_victim_service as svc
 
 from schemas.all_cases_schema import AllCasesRow
-from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
+from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse, CaseStatusOut, UpdateCaseStatusRequest, UpdateCaseStatusResponse
 from schemas.case_evidence_schema import CaseEvidenceList, CaseEvidenceRow, PhotoDeleteResult, PhotoUploadRequest, PhotoUploadResult, UpdateEvidenceRequest
 from schemas.case_timeline_schema import AddTimelineEventRequest, CaseTimelineList, DeleteTimelineEventResult, TimelineEventRow
 from schemas.case_timeline_schema import CaseTimelineList
@@ -33,7 +36,7 @@ from schemas.case_suspect_schema import (
 )
 from schemas.search_schema import SearchResponse
 from services.all_cases_service import get_case_summary
-from services.case_detail_service import add_evidence, add_suspect, add_victim, add_witness, get_case_detail
+from services.case_detail_service import add_evidence, add_suspect, add_victim, add_witness, get_case_detail, update_case_status
 from services.case_evidence_service import add_photo, delete_photo, get_evidence, list_evidences, update_evidence
 from services.search_service import search_all
 from services.case_lead_service import list_leads, add_manual_lead, update_lead_status, delete_lead
@@ -44,8 +47,6 @@ from schemas.case_witness_schema import (
     UpdateWitnessRequest,
 )
 from services import case_witness_service as swc
-
-
 
 router = APIRouter()
 
@@ -722,4 +723,25 @@ def upload_fir_file_endpoint(
         case_id=case_id,
         body=body,
         request=request,
+    )
+
+@router.patch(
+    "/{case_id}/status",
+    response_model=UpdateCaseStatusResponse,
+    summary="Update case status",
+)
+def patch_case_status(
+    case_id: str,
+    body:    UpdateCaseStatusRequest,
+    request: Request,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(get_current_investigator),
+) -> UpdateCaseStatusResponse:
+    return update_case_status(
+        db,
+        user        = user,
+        case_id     = case_id,
+        status_code = body.status_code,   # ← was body.status_id
+        note        = body.note,
+        request     = request,
     )

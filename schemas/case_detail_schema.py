@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 import re
 from typing import Optional
 from datetime import date
+ 
 
 CNIC_RE   = re.compile(r'^\d{5}-\d{7}-\d$')
 PHONE_RE  = re.compile(r'^(\+92|0)[-\s]?\d{3}[-\s]?\d{7}$')
@@ -172,3 +175,27 @@ class AddTimelineResult(BaseModel):
     the frontend's local list. Same shape as AddResult.timeline_events."""
     created_ids:      List[str]   
     timeline_events: List[TimelineEventOut]
+
+class CaseStatusOut(BaseModel):
+    id:          int
+    code:        str
+    label:       str
+    is_terminal: bool
+    sort_order:  int
+    active:      bool
+
+    class Config:
+        from_attributes = True
+
+
+class UpdateCaseStatusRequest(BaseModel):
+    status_code: str = Field(..., description="Code of the target status, e.g. 'OPEN'")
+    note: Optional[str] = Field(None, max_length=2000)
+
+
+class UpdateCaseStatusResponse(BaseModel):
+    case_id:        str
+    old_status:     str
+    new_status:     str
+    update_note_id: Optional[int]
+    updated_at:     datetime
