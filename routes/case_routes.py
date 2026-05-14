@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -9,12 +9,13 @@ from dependencies.auth import get_current_investigator, get_current_user
 from models import User
 from schemas.case_linked_schema import CaseLinkedCasesList
 from schemas.case_location_schema import CaseLocationResponse
+from schemas.case_register_schema import CaseRegisterRequest, CaseRegisterResponse, FIRFileUploadRequest, FIRFileUploadResult
 from schemas.case_victim_schema import (
     CaseVictimsList, VictimDetail,
     UpdateVictimRequest,
 )
 from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadRequest, PersonPhotoUploadResult
-from services import case_linked_service, case_location_service, case_victim_service as svc
+from services import case_linked_service, case_location_service, case_register_service, case_victim_service as svc
 
 from schemas.all_cases_schema import AllCasesRow
 from schemas.case_detail_schema import AddEvidenceRequest, AddTimelineResult, AddVictimRequest, AddWitnessRequest, CaseDetailResponse
@@ -665,4 +666,60 @@ def delete_manual_event(
 ) -> DeleteTimelineEventResult:
     return stc.delete_manual_event(
         db, user=user, case_id=case_id, event_id=event_id, request=request,
+    )
+
+@router.post(
+    "",
+    response_model=CaseRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new case (FIR + case details + location + crime details).",
+)
+def register_case_endpoint(
+    body: CaseRegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> CaseRegisterResponse:
+    """Frontend entry point used by RegisterCasePage.handleSubmit.
+
+    On success returns 201 with `{ case_id, fir_number, timeline_events }`.
+    The frontend then runs its child-entity calls (victims/suspects/etc.)
+    against `case_id` — see src/services/caseApi.js → registerCaseFull.
+    """
+    return case_register_service.register_case(
+        db,
+        user=user,
+        body=body,
+        request=request,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# PATCH /api/investigator/cases/{case_id}/fir-file
+# ──────────────────────────────────────────────────────────────────────────
+@router.patch(
+    "/{case_id}/fir-file",
+    response_model=FIRFileUploadResult,
+    summary="Attach (or replace) the FIR file for an existing case.",
+)
+def upload_fir_file_endpoint(
+    case_id: str,
+    body: FIRFileUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FIRFileUploadResult:
+    """Called by the frontend immediately after POST /cases when a FIR
+    file was attached. Separate endpoint so:
+      - The JSON POST body stays small.
+      - Re-upload / replace works without re-submitting the whole case.
+      - It mirrors the file-upload pattern already used by evidence and
+        person-photo flows.
+    """
+    return case_register_service.upload_fir_file(
+        db,
+        user=user,
+        case_id=case_id,
+        body=body,
+        request=request,
     )
