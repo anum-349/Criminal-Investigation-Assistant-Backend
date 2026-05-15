@@ -5,9 +5,12 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from fastapi import HTTPException, Request
+from sqlalchemy import event as sa_event
 
 from models import Notification, User, UserPreference, Severity
 import logging
+
+from services.notification_events import publish as _publish_notification_event
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +190,7 @@ def update_preferences(db: Session, *, user: User, prefs: dict) -> dict:
     return get_preferences(db, user=user)
 # ── Push helper (call from other services) ────────────────────────────────
 
+
 def push(
     db: Session, *,
     user_id:      int,
@@ -201,11 +205,15 @@ def push(
     """
     Create a Notification row. Respects user preference if pref_key given.
     Call this from any service that needs to notify a user.
+ 
+    After the caller's transaction commits, an in-process SSE event is
+    fired so open notification streams for this user wake up and refetch.
+    If the transaction rolls back, no event is fired.
     """
     resolved_key = pref_key or PREF_KEY_MAP.get(type)
     if resolved_key and not _pref_enabled(db, user_id, resolved_key):
         return None
-    
+ 
     n = Notification(
         notification_id = _notif_id(),
         user_id         = user_id,
@@ -219,4 +227,27 @@ def push(
         created_at      = datetime.now(UTC),
     )
     db.add(n)
+ 
+    # ── Defer the SSE publish until the caller commits ────────────────
+    # Capture the data we need NOW (the listener can't safely touch the
+    # session after commit). We use `once=True` so SQLAlchemy detaches
+    # the listener safely after the dispatch loop completes — doing it
+    # ourselves from inside the listener mutates the deque during
+    # iteration and raises RuntimeError.
+    event_payload = {
+        "type":     type,
+        "title":    title,
+        "severity": severity_label,
+    }
+    target_user_id = user_id
+ 
+    def _on_commit(session):
+        try:
+            _publish_notification_event(target_user_id, event_payload)
+        except Exception:
+            log.exception("Failed to publish SSE event for user=%s", target_user_id)
+ 
+    # once=True → auto-detach after first invocation, safely.
+    sa_event.listen(db, "after_commit", _on_commit, once=True)
+ 
     return n

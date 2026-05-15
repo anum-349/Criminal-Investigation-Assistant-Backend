@@ -93,7 +93,20 @@ class VictimInput(BaseModel):
     natureOfInjuries:   Optional[str] = None
     causeOfDeath:       Optional[str] = None
     statement:          Optional[str] = None
-
+    declaredDead:       Optional[str] = None
+    nextFollowUp:       Optional[str]  = None    # YYYY-MM-DD
+    threatLevel:        Optional[str]  = None
+    protectionAssigned: Optional[str]  = None
+    notes:              Optional[str]  = None    # → protection_notes
+    injurySummary:      Optional[str]  = None
+    injuryRecordedBy:   Optional[str]  = None
+    relation:           Optional[str]  = None
+    caseType:           Optional[str]  = None
+    medicalReport:      Optional[bool] = None
+    postmortem:         Optional[bool] = None
+    protectionRequired: Optional[bool] = None
+    cooperative:        Optional[bool] = None
+    
 class AddVictimRequest(BaseModel):
     victims: List[VictimInput]
 

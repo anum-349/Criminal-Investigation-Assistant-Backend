@@ -315,12 +315,17 @@ def add_victim(
             if v.occupation and not person.occupation:
                 person.occupation = v.occupation
 
-            latest = (
-                db.query(CaseVictim)
-                .filter(CaseVictim.case_id_fk == case.id)
-                .order_by(CaseVictim.id.desc())
-                .first()
-            )
+            if v.nextFollowUp:
+                try:
+                    parsed_follow_up =date.fromisoformat(v.nextFollowUp)
+                except ValueError:
+                    parsed_follow_up = None   # silently ignore malformed date
+                    latest = (
+                        db.query(CaseVictim)
+                        .filter(CaseVictim.case_id_fk == case.id)
+                        .order_by(CaseVictim.id.desc())
+                        .first()
+                    )
 
             if latest:
                 last_num = int(latest.victim_id.split("-")[-1])
@@ -330,16 +335,39 @@ def add_victim(
             next_num = last_num + 1
 
             row = CaseVictim(
-                case_id_fk=case.id,
-                person_id=person.id,
-                victim_id=_next_victim_id(case.case_id, count=next_num),
-                status_id=_victim_status_id(db, v.status),
-                primary_label=v.primaryLabel,
-                injury_type=v.injuryType,
-                nature_of_injuries=v.natureOfInjuries,
-                cause_of_death=v.causeOfDeath,
-                statement=v.statement,
+                case_id_fk        = case.id,
+                person_id         = person.id,
+                victim_id         = _next_victim_id(case.case_id, count=next_num),
+                status_id         = _victim_status_id(db, v.status),
+                primary_label     = v.primaryLabel,
+                injury_type       = v.injuryType,
+                nature_of_injuries= v.natureOfInjuries,
+                cause_of_death    = v.causeOfDeath,
+                declared_dead     = v.declaredDead,
+                postmortem_autopsy= v.postmortemAutopsy,
+                statement         = v.statement,
+        
+                # NEW
+                next_follow_up      = parsed_follow_up,
+                protection_assigned = v.protectionAssigned,
+                protection_notes    = v.notes,
+                injury_summary      = v.injurySummary,
+                injury_recorded_by  = v.injuryRecordedBy,
+                relation_to_suspect = v.relation,
+                medical_report      = bool(v.medicalReport)      if v.medicalReport      is not None else False,
+                postmortem          = bool(v.postmortem)         if v.postmortem         is not None else False,
+                protection_required = bool(v.protectionRequired) if v.protectionRequired is not None else False,
+                cooperative         = bool(v.cooperative)        if v.cooperative        is not None else True,
             )
+ 
+            # threat_level_id is a FK lookup, do it separately
+            if v.threatLevel:
+                from services.case_register_service import _priority_id  # reuses Severity lookup
+                try:
+                    row.threat_level_id = _priority_id(db, v.threatLevel)
+                except Exception:
+                    pass
+        
             db.add(row)
             db.flush()
             created_ids.append(row.victim_id)

@@ -7,8 +7,7 @@ from models import User
 from services import notification_service as svc
 
 router = APIRouter()
-
-
+        
 @router.get("")
 def list_notifications(
     request:   Request,

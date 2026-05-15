@@ -289,12 +289,20 @@ def update_victim(
             changes.append(f"{body_attr} → {bool(new_val)}")
 
     if body.nextFollowUp is not None:
-        new_date = _parse_ymd(body.nextFollowUp) if body.nextFollowUp.strip() else None
-        if new_date != victim.next_follow_up:
-            victim.next_follow_up = new_date
-            changes.append(
-                f"nextFollowUp → {body.nextFollowUp.strip() or '—'}"
-            )
+        new_val = body.nextFollowUp.strip() if isinstance(body.nextFollowUp, str) else None
+        if new_val == "":
+            if victim.next_follow_up is not None:
+                victim.next_follow_up = None
+                changes.append("nextFollowUp cleared")
+        elif new_val:
+            try:
+                parsed =date.fromisoformat(new_val)
+                if parsed != victim.next_follow_up:
+                    victim.next_follow_up = parsed
+                    changes.append(f"nextFollowUp → {new_val}")
+            except ValueError:
+                # malformed — ignore rather than 500 the whole request
+                pass
 
     if body.forensic is not None:
         new_list = [s.strip() for s in body.forensic if s and s.strip()]
