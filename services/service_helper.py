@@ -2,11 +2,8 @@ import base64
 from datetime import date, datetime
 import os
 import re
-import secrets
-from typing import Optional
-
+from typing import Optional, Tuple
 from fastapi import HTTPException
-from sqlalchemy import Tuple
 from sqlalchemy.orm import Session
 
 from models import Case, Person, User

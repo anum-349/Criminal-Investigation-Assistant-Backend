@@ -1,0 +1,52 @@
+# Keep the main backend image small and clean.
+
+# Python noise
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ─── Project-specific ─────────────────────────────────────────────────────────
+# Don't ship the AI service inside the main backend image — it has its own
+# Dockerfile and image. Keeping it out also saves ~3 GB.
+fir-api/
+
+# Don't bake uploaded files / local DBs into the image — they're volume-mounted.
+uploads/
+sqlite_data/
+
+# Don't ship tests in the production image (saves a few MB and stops accidental
+# test runs in prod).
+tests/
+
+# Seed scripts are one-shot tools — keep them in the repo but not the image.
+
+
+# Docs
+*.md
+!README.md

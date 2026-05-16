@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FIR Processing Pipeline — Python dependencies
+# Stack:
+#   • OCR        → pytesseract + pdfplumber + pdf2image
+#   • NER        → spaCy (English) + HuggingFace Transformers (Urdu, multilingual)
+#   • Translate  → MarianMT (Helsinki-NLP/opus-mt-ur-en)
+#   • Classify   → Sentence-Transformers (multilingual MiniLM) + scikit-learn
+#   • XAI        → keyword evidence + LIME on SBERT
+#   • Lang ID    → fastlangdetect (offline, fast)
+#
+# All models run locally on CPU. No external API calls — required by the
+# data-sovereignty constraints of the criminal-investigation domain.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# ── OCR / text extraction ────────────────────────────────────────────────────
+pdfplumber==0.11.4
+pdf2image==1.17.0
+pytesseract==0.3.13
+Pillow==10.4.0
+
+# ── ML / NLP core ────────────────────────────────────────────────────────────
+# Pinned to versions known to work together with PyTorch 2.4 CPU.
+torch==2.4.1
+transformers==4.46.0
+sentencepiece==0.2.0       # required by MarianMT tokenizer
+sacremoses==0.1.1          # required by MarianMT for detokenization
+sentence-transformers==3.2.1
+accelerate==1.0.1
+
+# spaCy — English NER on translated text
+spacy==3.8.2
+# en_core_web_sm is installed separately via:
+#   python -m spacy download en_core_web_sm
+
+# ── Classical ML / classifier head ───────────────────────────────────────────
+scikit-learn==1.5.2
+joblib==1.4.2
+numpy==1.26.4              # pinned <2.0 — torch/transformers built against numpy 1.x
+
+# ── Language detection (offline, fast) ───────────────────────────────────────
+fasttext-wheel==0.9.2
+
+# ── Misc utilities ───────────────────────────────────────────────────────────
+pydantic==2.9.2
+python-dotenv==1.0.1

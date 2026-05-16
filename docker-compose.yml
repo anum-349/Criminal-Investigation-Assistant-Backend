@@ -1,13 +1,130 @@
-version: "3.9"
+# ─────────────────────────────────────────────────────────────────────────────
+# Project: AI-Powered Criminal Investigation Assistant
+# Top-level docker-compose
+#
+# Brings up the whole stack with one command:
+#   docker compose up           # production-ish
+#   docker compose up --build   # rebuild images first
+#
+# Services:
+#   postgres    → 5432   (internal-only; host port mapped for psql/PgAdmin)
+#   backend     → 8000   (FastAPI: cases, auth, leads, users, …)
+#   fir-api     → 8001   (FastAPI: OCR + AI pipeline, separate image)
+#
+# Networking:
+#   All three services share the `cia-net` network. Inside the network
+#   they reach each other by service name (e.g. backend → postgres:5432).
+#   The host (your laptop / Vite dev server) reaches them via localhost:<port>.
+#
+# Persistence:
+#   • pg-data         → Postgres on a named volume (survives container rebuild)
+#   • ./uploads       → host-mounted, so case photos / evidence persist outside Docker
+#   • ./sqlite_data   → host-mounted, kept for offline-mode parity (read-only inside)
+#
+# Frontend (Vite) is intentionally NOT containerised here — running it on the
+# host with hot reload (`npm run dev`) is much nicer DX during development.
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  fir-api:
-    build: .
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # PostgreSQL
+  # ──────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cia-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-cia}
+      POSTGRES_USER:     ${POSTGRES_USER:-cia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cia_dev_password}
+    ports:
+      - "5432:5432"            # expose on host so you can use psql / PgAdmin
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cia} -d ${POSTGRES_DB:-cia}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cia-net
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Main backend (cases, auth, leads, users)
+  # ──────────────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cia-backend:latest
+    container_name: cia-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy   # don't start until Postgres accepts connections
     ports:
       - "8000:8000"
-    volumes:
-      # Hot-reload: mount source so code changes reflect without rebuild
-      - .:/app
     environment:
-      - PYTHONUNBUFFERED=1
+      # The hostname `postgres` resolves to the postgres service on cia-net.
+      # Inside the container this works; on the host you'd use localhost:5432.
+      SQLALCHEMY_DATABASE_URL: postgresql://${POSTGRES_USER:-cia}:${POSTGRES_PASSWORD:-cia_dev_password}@postgres:5432/${POSTGRES_DB:-cia}
+      # Where the AI service is reachable from inside the network. Use this
+      # in your backend code if/when you want it to call the AI service
+      # server-side (e.g. lead generation). Frontend calls fir-api directly.
+      FIR_API_URL: http://fir-api:8001
+      # Anything else your backend reads (JWT secret, etc.) — keep them in
+      # .env (gitignored) and reference here.
+      JWT_SECRET: ${JWT_SECRET:-change_me_in_env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Persist uploaded files outside the container so they survive rebuilds
+      # AND so you can inspect them from the host.
+      - ./uploads:/app/uploads
+      # SQLite mirror for offline-mode parity (read-only — Postgres is the
+      # source of truth inside the container).
+      - ./sqlite_data:/app/sqlite_data
+    networks:
+      - cia-net
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # FIR AI pipeline (OCR + Marian + SBERT + spaCy + mBERT NER)
+  # Heavy image (~3 GB) — slow first build, fast after.
+  # ──────────────────────────────────────────────────────────────────────────
+  fir-api:
+    build:
+      context: ./fir-api
+      dockerfile: Dockerfile
+    image: cia-fir-api:latest
+    container_name: cia-fir-api
     restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FIR_CORS_ORIGINS: "*"           # tighten in production
+      FIR_MAX_UPLOAD_MB: "20"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      WORKERS: "1"                    # one worker is plenty; each holds 700 MB of weights
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 90s               # transformers warm-up takes 30-60s
+    networks:
+      - cia-net
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Network + volumes
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  cia-net:
+    driver: bridge
+
+volumes:
+  pg-data:
+    driver: local

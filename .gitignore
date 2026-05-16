@@ -1,16 +1,45 @@
-**/__pycache__/**/*
-**/.pytest_cache/**/*
-**/venv/**/*
-**/env/**/* 
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.env
-**/sqlite_data/**/*
-*.log
+.pytest_cache/
+.coverage
+.mypy_cache/
 
+# ── Virtual environments ────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+fir_api/venv/
+fir_api/.venv/
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
 .env
+.env.local
+.env.*.local
+.env.example
 
+# ── Local data / runtime state ──────────────────────────────────────────────
 uploads/
+sqlite_data/
+fir_api/uploads/
 
-alembic/versions/__pycache__/
+# ── AI Model weights (downloaded separately by setup) ───────────────────────
+# These are ~800 MB — never commit. Document download steps in README.
+fir_api/models/
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
