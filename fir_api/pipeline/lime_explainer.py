@@ -1,23 +1,3 @@
-"""
-pipeline/lime_explainer.py
-──────────────────────────
-Model-agnostic LIME (Local Interpretable Model-Agnostic Explanations) for
-text classification. Works with any object exposing `predict_proba(list[str])`.
-
-How it works:
-    1. Tokenise the input into words.
-    2. Generate `num_samples` perturbed copies by randomly dropping ~30%
-       of the words.
-    3. Get the model's P(class=1) for each perturbation.
-    4. Fit a linear model that maps "word present / absent" → probability.
-    5. Each word's coefficient = its LIME weight (positive → pushes the
-       prediction toward FIR; negative → pushes away).
-
-This is the canonical LIME-for-text approach from Ribeiro et al. (2016),
-implemented from scratch here so we don't carry the full `lime` package as
-a dependency (it pulls scikit-image, matplotlib, etc. — way too heavy).
-"""
-
 from __future__ import annotations
 
 import random

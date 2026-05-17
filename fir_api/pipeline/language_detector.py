@@ -1,20 +1,3 @@
-"""
-pipeline/language_detector.py
-─────────────────────────────
-Detects whether the OCR'd text is Urdu, English, or mixed.
-
-Previous version used a character-block ratio (Unicode 0600-06FF). That works
-but fails on:
-  • Roman-Urdu ("mai apne ghar par tha jab teen mulzim aaye…")
-  • OCR noise that produces garbage Unicode in the Urdu block
-  • Short snippets where the ratio is unstable
-
-New version uses FastText's `lid.176` language identifier (offline, 130 MB,
-176 languages, ~5 ms per inference). We still keep the script-ratio as a
-secondary signal because FastText sometimes confuses Urdu with Arabic on
-single sentences — when both signals agree, confidence goes up.
-"""
-
 from __future__ import annotations
 
 import logging

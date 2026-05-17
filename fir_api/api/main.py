@@ -1,24 +1,3 @@
-"""
-api/main.py
-───────────
-FastAPI entry point for the FIR processing service.
-
-Endpoints:
-    GET  /                — basic liveness
-    GET  /health          — readiness (models loaded?) + per-model status
-    POST /api/process-fir — main upload endpoint
-
-Why a startup hook?
-    Transformer models take 5-15 s to load cold. We pay that cost once at
-    container start so every real request sees a warm model. Without this
-    the first investigator to upload a FIR would wait 15 s and possibly
-    time out.
-
-CORS:
-    Open to all origins in dev. In production this should be restricted to
-    your frontend's URL via FIR_CORS_ORIGINS env var.
-"""
-
 from __future__ import annotations
 
 import logging

@@ -28,6 +28,7 @@ fir_api/uploads/
 # ── AI Model weights (downloaded separately by setup) ───────────────────────
 # These are ~800 MB — never commit. Document download steps in README.
 fir_api/models/
+fir_api/
 
 # ── IDE ─────────────────────────────────────────────────────────────────────
 .idea/

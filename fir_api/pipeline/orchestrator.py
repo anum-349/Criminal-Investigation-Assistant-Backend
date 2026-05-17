@@ -1,33 +1,10 @@
-"""
-pipeline/orchestrator.py
-────────────────────────
-End-to-end FIR processing pipeline.
-
-Flow:
-    1. Text extraction      (pdfplumber + Tesseract OCR with eng+urd)
-    2. Language detection   (FastText)
-    3. Urdu → English MT    (MarianMT)
-    4. FIR validation       (multilingual SBERT + LogReg)
-    5. Entity extraction    (regex + spaCy NER + mBERT Urdu NER)
-    6. Payload generation   (frontend-shaped JSON)
-
-Each step is small, isolated, and instrumented for XAI. The output preserves
-the exact response shape the existing React frontend expects so the
-fir-upload page works without changes.
-
-Raises:
-    ValueError — user-facing errors (non-FIR doc, unreadable scan). The
-                 FastAPI handler translates these to HTTP 422 with a toast
-                 message.
-"""
-
 from __future__ import annotations
 
 import logging
 import time
 from typing import Any, Dict
 
-from pipeline.text_extractor   import extract_text
+from pipeline.text_extractor    import extract_text
 from pipeline.language_detector import detect_language
 from pipeline.urdu_translator   import translate_urdu_to_english
 from pipeline.fir_validator     import validate_fir
@@ -40,17 +17,6 @@ logger = logging.getLogger("fir.orchestrator")
 
 
 def run_pipeline(file_path: str, original_filename: str = "") -> Dict[str, Any]:
-    """Run the full pipeline. Returns the JSON-ready response dict.
-
-    Response schema (matches the React fir-upload page):
-        {
-          "success": bool,
-          "error":   Optional[str],
-          "payload": {...entity fields for form auto-fill...},
-          "steps":   {...XAI breakdown per stage...},
-          "duration_ms": int,
-        }
-    """
     t0 = time.perf_counter()
     timings: Dict[str, float] = {}
 
@@ -81,6 +47,17 @@ def run_pipeline(file_path: str, original_filename: str = "") -> Dict[str, Any]:
         translation = translate_urdu_to_english(raw_text)
         english_text = translation["translated_text"]
         translation_skipped = False
+    elif lang.language == "unknown":
+        translation = {
+            "translated_text":  raw_text,
+            "source_language":  "unknown",
+            "coverage":         0.0,
+            "method":           "passthrough_unknown",
+            "unknown_tokens":   [],
+            "chunks_translated": 0,
+        }
+        english_text = raw_text
+        translation_skipped = True
     else:
         translation = {
             "translated_text":  raw_text,
@@ -95,32 +72,26 @@ def run_pipeline(file_path: str, original_filename: str = "") -> Dict[str, Any]:
     _tick("translation", s)
 
     # ── 4. FIR validation ────────────────────────────────────────────────────
-    # We validate on a *concatenation* of original + translated text — that
-    # way we don't miss Urdu signals that Marian rewrote in a way the
-    # classifier doesn't recognise, and English documents are unaffected.
     s = time.perf_counter()
     validation_input = raw_text if lang.language == "english" else f"{english_text}\n\n{raw_text}"
     validation = validate_fir(validation_input)
     _tick("validation", s)
 
     if not validation["is_fir"]:
-        # User-facing rejection — bubble up so the API can toast it.
         raise ValueError(
             f"This document does not appear to be a FIR. {validation['reason']}"
         )
 
-    # ── 5. LIME-style explanation (optional XAI) ─────────────────────────────
+    # ── 5. LIME explanation (XAI) ────────────────────────────────────────────
     s = time.perf_counter()
     try:
-        # The new validator uses SBERT — we wrap it in a tiny adapter so LIME
-        # can still perturb words and observe probability change.
         lime_result = _lime_on_sbert_classifier(english_text)
     except Exception as e:
         logger.warning("LIME explanation failed: %s", e)
         lime_result = {"lime_weights": [], "summary": "LIME unavailable for this request."}
     _tick("lime", s)
 
-    # ── 6. Entity extraction ─────────────────────────────────────────────────
+    # ── 6. Entity extraction (Pakistani FIR tuned) ──────────────────────────
     s = time.perf_counter()
     entity_result = extract_entities(
         text=english_text,
@@ -144,17 +115,13 @@ def run_pipeline(file_path: str, original_filename: str = "") -> Dict[str, Any]:
 
     duration_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-    # ── Compose response in the shape the React component expects ───────────
-    # The frontend uses both `result.payload.firNumber` (flat) and
-    # `result.steps.validation.evidence` (nested). We support both by
-    # flattening the payload here.
     flat_payload = _flatten_payload(payload_envelope, entity_result)
 
     return {
-        "success":   True,
-        "error":     None,
+        "success":     True,
+        "error":       None,
         "duration_ms": duration_ms,
-        "payload":   flat_payload,
+        "payload":     flat_payload,
         "steps": {
             "extraction": {
                 "method":     extraction.get("method"),
@@ -171,21 +138,20 @@ def run_pipeline(file_path: str, original_filename: str = "") -> Dict[str, Any]:
                 "chunks_translated": translation.get("chunks_translated", 0),
                 "unknown_tokens":    translation.get("unknown_tokens", [])[:10],
             },
-            "validation": validation,
-            "lime":       lime_result,
+            "validation":        validation,
+            "lime":              lime_result,
             "entity_extraction": entity_result["xai_breakdown"],
         },
-        "timings_ms": timings,
+        "timings_ms":   timings,
         "models_ready": models.status,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Flatten nested envelope → flat shape the React form's onExtracted expects
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _flatten_payload(envelope: Dict, entity_result: Dict) -> Dict:
-    """Flatten the nested payload + add the entity tiles the form expects."""
     p = envelope.get("payload", {})
     meta = envelope.get("meta", {})
 
@@ -193,67 +159,79 @@ def _flatten_payload(envelope: Dict, entity_result: Dict) -> Dict:
     incident = p.get("incident", {})
     persons  = p.get("persons", {})
     evidence = p.get("evidence", {})
+    police   = p.get("police", {})
+
+    complainant = persons.get("complainant", {})
 
     return {
-        # FIR identifiers
+        # ── FIR identifiers ──────────────────────────────────────────────────
         "firNumber":          fir_info.get("firNumber"),
         "caseNumber":         fir_info.get("firNumber"),
-        "caseTitle":          entity_result["fields"].get("caseTitle"),
+        "caseTitle":          fir_info.get("caseTitle"),
+
+        # ── Location hierarchy (Pakistan-specific) ──────────────────────────
         "policeStation":      fir_info.get("policeStation"),
+        "tehsil":             fir_info.get("tehsil"),
         "district":           fir_info.get("district"),
         "province":           fir_info.get("province"),
-        # Incident
+        "beat":               fir_info.get("beat"),
+
+        # ── Incident ─────────────────────────────────────────────────────────
+        "dateOfReport":       incident.get("dateOfReport"),
         "dateOfIncident":     incident.get("dateOfIncident"),
         "timeOfIncident":     incident.get("timeOfIncident"),
         "incidentAddress":    incident.get("incidentAddress"),
+        "distanceFromPS":     incident.get("distanceFromPS"),
         "offenceType":        incident.get("offenceType"),
-        "allOffences":        entity_result["fields"].get("allOffences", []),
+        "allOffences":        incident.get("allOffences", []),
         "legalSections":      incident.get("legalSections", []),
-        "applicableAct":      entity_result["fields"].get("applicableAct"),
-        # Persons
-        "complainantName":    persons.get("complainant", {}).get("name"),
-        "complainantFather":  entity_result["fields"].get("complainantFather"),
-        "complainantCNIC":    persons.get("complainant", {}).get("cnic"),
-        "complainantAge":     persons.get("complainant", {}).get("age"),
-        "complainantPhone":   persons.get("complainant", {}).get("phone"),
+        "applicableAct":      incident.get("applicableAct"),
+        "sectionReadWith":    incident.get("sectionReadWith"),
+
+        # ── Complainant (full Pakistani identity block) ─────────────────────
+        "complainantName":      complainant.get("name"),
+        "complainantFather":    complainant.get("father"),
+        "complainantCNIC":      complainant.get("cnic"),
+        "complainantAge":       complainant.get("age"),
+        "complainantPhone":     complainant.get("phone"),
+        "complainantCaste":     complainant.get("caste"),
+        "complainantProfession": complainant.get("profession"),
+        "complainantAddress":   complainant.get("address"),
+
+        # ── Other persons ───────────────────────────────────────────────────
         "accusedPersons":     persons.get("accusedPersons", []),
+        "accusedUnknown":     persons.get("accusedUnknown", False),
         "victims":            persons.get("victims", []),
         "witnesses":          persons.get("witnesses", []),
-        # Evidence
+
+        # ── Evidence ────────────────────────────────────────────────────────
         "weaponsInvolved":    evidence.get("weaponsInvolved", []),
         "vehiclesInvolved":   evidence.get("vehiclesInvolved", []),
         "vehiclePlates":      evidence.get("vehiclePlates", []),
-        # Frontend extras
+        "hospitalReference":  evidence.get("hospitalReference"),
+
+        # ── Police / IO ─────────────────────────────────────────────────────
+        "investigatingOfficer": police.get("investigatingOfficer"),
+        "ioRank":               police.get("ioRank"),
+        "beltNumber":           police.get("beltNumber"),
+
+        # ── Frontend extras ─────────────────────────────────────────────────
         "completenessScore":  meta.get("completenessScore"),
-        "confidence":         _overall_confidence(meta, entity_result),
+        "confidence":         _overall_confidence(meta),
         "extractedEntities":  entity_result.get("extractedEntities", {}),
         "missingFields":      entity_result.get("missingFields", []),
-        "firLanguage":        meta.get("sourceLanguage", "english").capitalize(),
+        "firLanguage":        (meta.get("sourceLanguage") or "english").capitalize(),
         "firType":            "FIR",
     }
 
 
-def _overall_confidence(meta: Dict, entity_result: Dict) -> float:
-    """Combine completeness + OCR confidence into a single 0-100 score for
-    the toast message."""
+def _overall_confidence(meta: Dict) -> float:
     completeness = (meta.get("completenessScore") or 0) / 100.0
     ocr_conf     = meta.get("ocrConfidence") or 0.8
     return round(min(1.0, 0.5 * completeness + 0.5 * ocr_conf) * 100, 1)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LIME wrapper for the new SBERT classifier
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _lime_on_sbert_classifier(text: str, num_samples: int = 80) -> Dict:
-    """Lightweight LIME over the SBERT+LogReg pipeline.
-
-    LIME is model-agnostic so we just need a `predict_proba(list[str]) -> ndarray`
-    callable. We build one inline that reuses the warmed-up embedder.
-    Sample count is lower than for TF-IDF (80 vs 200) because each forward
-    pass through SBERT is ~10x more expensive than a TfidfVectorizer.transform,
-    and 80 samples are enough for word-level attribution in practice.
-    """
     if models.sentence_embedder is None or models.fir_classifier is None:
         return {"lime_weights": [], "summary": "LIME unavailable: classifier not loaded."}
 

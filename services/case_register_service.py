@@ -6,6 +6,7 @@ import re
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from fastapi import Request, HTTPException
+from services.case_linker_hook import enqueue_linking
 
 from models import (
     User, Investigator,
@@ -486,10 +487,17 @@ def register_case(
             crime=body.crime,
         )
 
-        # 9. Triple-write the registration event.
         ev = _log_registration(db, case=case, user=user, request=request)
-
+        
+        enqueue_linking(
+        db,
+        case_internal_id=case.id,
+        actor_user_id=user.id,
+        reason="case_registered",
+        )
+ 
         db.commit()
+
 
     except HTTPException:
         db.rollback()

@@ -1,38 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# WebSocket Connection Manager
-#
-# REPLACES `services/notification_events.py` (SSE) with a WebSocket-based
-# real-time channel. The public API is intentionally close to the old one
-# (subscribe / publish / unsubscribe) so the rest of the codebase changes
-# minimally.
-#
-# WHY THIS LIVES IN A SEPARATE MODULE
-# ────────────────────────────────────
-# The manager has to be importable from BOTH:
-#   • The WebSocket route handler (runs in the main event loop).
-#   • notification_service.push() (called from sync route handlers in
-#     FastAPI's threadpool).
-# Putting it in `services.realtime` makes it clear that anything wanting
-# to push to clients goes through this single chokepoint — easier to
-# reason about and easier to add a Redis pub/sub backend later when the
-# system scales beyond one process.
-#
-# THREAD SAFETY
-# ─────────────
-# Same constraint as the old SSE module: WebSocket.send_text() is a
-# coroutine that must run on the loop where the WS was accepted. Sync
-# code (worker thread) calling publish() schedules the send via
-# loop.call_soon_threadsafe → run_coroutine_threadsafe. The connection
-# manager handles all of that internally — callers don't need to think
-# about it.
-#
-# AUTH MODEL
-# ──────────
-# Auth is performed in the route handler (it validates the JWT and
-# resolves user_id) BEFORE calling manager.register(). The manager itself
-# is auth-agnostic; it just tracks (user_id → list of websockets).
-# ─────────────────────────────────────────────────────────────────────────────
-
 from __future__ import annotations
 
 import asyncio
@@ -196,4 +161,4 @@ def publish(user_id: int, event: Dict[str, Any]) -> int:
     # We tag every payload as a notification event so the client can
     # distinguish app messages from server-initiated pings.
     payload = {"type": "notification", **event}
-    return manager.publish(user_id, payload)
+    return manager.publish(user_id, payload)# services/realtime/ws_manager.py

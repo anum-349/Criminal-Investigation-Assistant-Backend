@@ -1,31 +1,3 @@
-"""
-pipeline/fir_validator.py
-─────────────────────────
-Determines whether the uploaded document is a First Information Report.
-
-Architecture:
-    Text  →  multilingual SBERT (frozen)  →  LogReg head  →  P(is_FIR)
-
-Why this beats the old TF-IDF + LR:
-    • SBERT understands *semantics*, not just word overlap. A FIR that uses
-      synonyms ("complainant" vs "petitioner", "incident" vs "occurrence")
-      is still recognised. TF-IDF treats them as unrelated.
-    • Multilingual SBERT works directly on Urdu, English, and Roman-Urdu —
-      no translation step needed for validation, so we catch non-FIR
-      Urdu documents before spending CPU on translation.
-    • XAI: we keep keyword-evidence + LIME (now on real embeddings) so the
-      reasoning panel still makes sense to investigators.
-
-Industry practices applied here:
-    • Frozen embeddings + linear head = fast training, fast serving, robust
-      to small training corpora (Bommasani et al., 2021)
-    • Class-balanced synthetic corpus seeded with real FIR phrasings in
-      both languages
-    • Threshold tuned via cross-validation, not hard-coded at 0.5
-    • Decision returns a *calibrated* probability + missing-field heuristic
-      so downstream code can show a uniform confidence to the user
-"""
-
 from __future__ import annotations
 
 import logging
@@ -39,7 +11,7 @@ from pipeline.model_loader import models
 
 logger = logging.getLogger("fir.validator")
 
-CONFIDENCE_THRESHOLD = 0.55  # tuned on the synthetic CV set; see notes below
+CONFIDENCE_THRESHOLD = 0.40  # tuned on the synthetic CV set; see notes below
 
 
 # ─────────────────────────────────────────────────────────────────────────────

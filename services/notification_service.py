@@ -10,14 +10,19 @@ from sqlalchemy import event as sa_event
 from models import Notification, User, UserPreference, Severity
 import logging
 
-from services.notification_events import publish as _publish_notification_event
+# ─── Transport swap: SSE → WebSocket ──────────────────────────────────────
+# Old: `from services.notification_events import publish as _publish_notification_event`
+# The new module exposes a `publish` function with the same shape; the only
+# difference is the events go over a WebSocket instead of an SSE stream.
+from services.realtime.ws_manager import publish as _publish_notification_event
 
 log = logging.getLogger(__name__)
 
 # ── Preference keys ────────────────────────────────────────────────────────
 PREF_KEYS = [
     "case_update_alerts",
-    "ai_lead_notifications", 
+    "ai_lead_notifications",
+    "case_link_alerts",
     "sound_alerts",
 ]
 
@@ -25,20 +30,21 @@ PREF_KEY_MAP = {
     "CASE_UPDATE":   "case_update_alerts",
     "CASE_ASSIGNED": "case_update_alerts",
     "NEW_LEAD":      "ai_lead_notifications",
+    "CASE_LINKED":   "case_link_alerts",
 }
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _notif_id() -> str:
     return f"NOTIF-{secrets.token_hex(6).upper()}"
-
-
+ 
+ 
 def _sev_id(db: Session, label: str) -> Optional[int]:
     from models import Severity
     row = db.query(Severity).filter(Severity.label == label).first()
     return row.id if row else None
-
-
+ 
+ 
 def _pref_enabled(db: Session, user_id: int, key: str) -> bool:
     """Returns True if the preference is enabled (default True if not set)."""
     row = db.query(UserPreference).filter(
@@ -48,7 +54,21 @@ def _pref_enabled(db: Session, user_id: int, key: str) -> bool:
     if not row:
         return True   # default ON
     return row.pref_value.lower() not in ("false", "0", "no", "off")
-
+ 
+ 
+def _row_to_dict(n: Notification) -> dict:
+    return {
+        "id":           n.notification_id,
+        "type":         n.type,
+        "title":        n.title,
+        "message":      n.message,
+        "linkUrl":      n.link_url,
+        "isRead":       n.is_read,
+        "readAt":       n.read_at.isoformat() if n.read_at else None,
+        "createdAt":    n.created_at.isoformat(),
+        "severity":     n.severity.label if n.severity else None,
+        "relatedCaseId": n.related_case_id,
+    }
 
 def _row_to_dict(n: Notification) -> dict:
     return {
@@ -194,21 +214,19 @@ def update_preferences(db: Session, *, user: User, prefs: dict) -> dict:
 def push(
     db: Session, *,
     user_id:      int,
-    type:         str,           # e.g. "NEW_LEAD", "CASE_UPDATE"
+    type:         str,
     title:        str,
     message:      str  = "",
     link_url:     Optional[str] = None,
     related_case_id: Optional[int] = None,
     severity_label:  str = "Normal",
-    pref_key:     Optional[str] = None,   # if set, check preference first
+    pref_key:     Optional[str] = None,
 ) -> Optional[Notification]:
-    """
-    Create a Notification row. Respects user preference if pref_key given.
-    Call this from any service that needs to notify a user.
+    """Create a Notification row, respecting user preferences.
  
-    After the caller's transaction commits, an in-process SSE event is
-    fired so open notification streams for this user wake up and refetch.
-    If the transaction rolls back, no event is fired.
+    On commit, fires a WebSocket event to every connected client for this
+    user (or a no-op if they're offline — the row still persists and they
+    see it on next reconnect / refetch).
     """
     resolved_key = pref_key or PREF_KEY_MAP.get(type)
     if resolved_key and not _pref_enabled(db, user_id, resolved_key):
@@ -228,14 +246,10 @@ def push(
     )
     db.add(n)
  
-    # ── Defer the SSE publish until the caller commits ────────────────
-    # Capture the data we need NOW (the listener can't safely touch the
-    # session after commit). We use `once=True` so SQLAlchemy detaches
-    # the listener safely after the dispatch loop completes — doing it
-    # ourselves from inside the listener mutates the deque during
-    # iteration and raises RuntimeError.
+    # ── Defer the WS publish until the caller commits ──────────────────
+    # Same pattern as before: if the txn rolls back, no event fires.
     event_payload = {
-        "type":     type,
+        "type":     type,                  # notification.type, e.g. "CASE_LINKED"
         "title":    title,
         "severity": severity_label,
     }
@@ -245,9 +259,8 @@ def push(
         try:
             _publish_notification_event(target_user_id, event_payload)
         except Exception:
-            log.exception("Failed to publish SSE event for user=%s", target_user_id)
+            log.exception("Failed to publish WS event for user=%s", target_user_id)
  
-    # once=True → auto-detach after first invocation, safely.
     sa_event.listen(db, "after_commit", _on_commit, once=True)
  
     return n

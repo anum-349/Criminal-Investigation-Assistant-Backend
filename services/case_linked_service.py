@@ -19,17 +19,13 @@ from schemas.case_linked_schema import (
 from services.service_helper import _resolve_case
 
 LINK_TYPE_LABEL = {
-    # link_type code           → human-readable label                  variant
-    "SAME_SUSPECT":           ("Similar suspect description",          "warning"),
-    "SAME_LOCATION":          ("Same building location",               "success"),
-    "SAME_VICTIM":            ("Involves victim's colleague",          "default"),
-    "SUSPECT_MOVEMENT":       ("Possible suspect movement pattern",    "destructive"),
-    "SCENE_PROXIMITY":        ("Repeated crime scene proximity",       "warning"),
-    "SAME_WEAPON":            ("Common weapon used",                   "warning"),
-    "SAME_MO":                ("Same modus operandi",                  "warning"),
-    "COMMON_EVIDENCE":        ("Common evidence",                      "success"),
-    "RELATED_INCIDENT":       ("Related incident",                     "default"),
-    "OTHER":                  ("Other relation",                       "default"),
+    "SAME_SUSPECT":  ("Same Suspect",        "danger"),
+    "SAME_VICTIM":   ("Same Victim",         "warning"),
+    "SAME_WEAPON":   ("Same Weapon",         "warning"),
+    "SAME_LOCATION": ("Same Location",       "info"),
+    "SAME_MO":       ("Same Modus Operandi", "info"),
+    "TEMPORAL":      ("Temporal Proximity",  "default"),
+    "OTHER":         ("Related",             "default"),
 }
 
 def _status_variant(label: str) -> str:
@@ -42,8 +38,8 @@ def _status_variant(label: str) -> str:
         return "warning"
     return "default"
 
-def _format_investigator(case: Case) -> str:
-    """'Insp. A. Khan' or '—'."""
+def _format_investigator(case):
+    """(existing helper — kept here for reference, do not duplicate)"""
     inv = case.assigned_to
     if not inv or not inv.user:
         return "—"
@@ -51,23 +47,43 @@ def _format_investigator(case: Case) -> str:
     name = inv.user.username
     return f"{rank}. {name}" if rank else name
 
-
-def _format_date(d: Optional[datetime]) -> str:
-    """Match the mock data's MM/DD/YYYY format. Frontend renders it as-is."""
+def _format_date(d):
+    """(existing helper — kept here for reference, do not duplicate)"""
     if not d:
         return "—"
     return d.strftime("%m/%d/%Y")
 
 
 def _row_from_link(link: CaseLink, other_case: Case) -> LinkedCaseRow:
-    """Build a LinkedCaseRow from a CaseLink + the 'other' case."""
+    """Build one frontend row from a CaseLink + the 'other' case.
+ 
+    Field mapping for the table the React page renders:
+      id            ← other_case.case_id (external ID, e.g. "C-10046")
+      title         ← other_case.case_title
+      investigator  ← rank + username of the assigned investigator
+      registerDate  ← created_at as MM/DD/YYYY
+      relation      ← explanation if set, else human label of link_type
+      confidence    ← similarity_score as a 0–100 integer (was 0–1 float)
+    """
     label, _variant = LINK_TYPE_LABEL.get(
         link.link_type,
         (link.link_type.replace("_", " ").title(), "default"),
     )
-
+ 
     relation_text = (link.explanation or "").strip() or label
-
+ 
+    # Confidence: engine writes 0.0–1.0; frontend table column is 0–100.
+    # We convert here so neither side has to change.
+    raw = link.similarity_score
+    if raw is None:
+        confidence_pct: Optional[int] = None
+    elif raw <= 1.0:
+        confidence_pct = int(round(raw * 100))
+    else:
+        # Already on 0–100 (e.g., manually entered via the "Link Cases"
+        # dialog) — leave it.
+        confidence_pct = int(round(raw))
+ 
     return LinkedCaseRow(
         id=other_case.case_id,
         linkedCaseId=other_case.case_id,
@@ -77,10 +93,9 @@ def _row_from_link(link: CaseLink, other_case: Case) -> LinkedCaseRow:
         status=other_case.case_status.label if other_case.case_status else "—",
         relation=relation_text,
         linkType=link.link_type,
-        similarityScore=link.similarity_score,
+        similarityScore=confidence_pct,
         explanation=link.explanation,
     )
-
 
 def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
     """Pull both directions of the link, eager-loading what we need."""

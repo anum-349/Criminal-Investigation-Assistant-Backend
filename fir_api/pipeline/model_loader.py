@@ -1,28 +1,3 @@
-"""
-pipeline/model_loader.py
-────────────────────────
-Singleton registry for all AI models used in the pipeline.
-
-Why a singleton?
-    Transformers are slow to load (200-500 MB on disk, 2-8 s cold start).
-    If we load them per-request, the API is unusable. We load once at
-    process startup and keep references warm for the lifetime of the worker.
-
-Industry practice:
-    • Models are loaded eagerly in `warmup()` — called from FastAPI's
-      `@app.on_event("startup")` hook so the first real request is fast.
-    • Each loader is wrapped in a try/except so the API still boots even if
-      one model fails (we log a warning and fall back to lighter logic).
-    • Model cache directory is controlled by HF_HOME env var so Docker can
-      bake weights into the image (avoiding download on container start).
-
-Models loaded:
-    1. MarianMT  (Helsinki-NLP/opus-mt-ur-en)         — Urdu → English MT
-    2. spaCy     (en_core_web_sm)                     — English NER
-    3. HF NER    (mirfan899/uner-uner-mbert)          — Urdu NER (mBERT fine-tuned)
-    4. SBERT     (paraphrase-multilingual-MiniLM-L12) — multilingual sentence embeddings
-"""
-
 from __future__ import annotations
 
 import logging

@@ -7,6 +7,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
 from fastapi import status, Request, HTTPException
 
+from services.case_linker_hook import enqueue_linking
+
 import os                                                        
 from models import AuditLog, CaseDraft, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, EvidencePhoto, WitnessType                                  
 import logging
@@ -165,6 +167,13 @@ def add_suspect(db: Session, *, user: User, case_id: str,
             )
             timeline_out.append(_timeline_to_out(ev, case.case_id))
 
+        enqueue_linking(
+            db,
+            case_internal_id=case.id,
+            actor_user_id=user.id,
+            reason="status_changed",
+        )
+ 
         db.commit()
     except HTTPException:
         db.rollback(); raise
@@ -389,7 +398,13 @@ def add_victim(
                 audit_target_id=row.victim_id,
             )
             timeline_out.append(_timeline_to_out(ev, case.case_id))
-
+        enqueue_linking(
+            db,
+            case_internal_id=case.id,
+            actor_user_id=user.id,
+            reason="status_changed",
+        )
+ 
         db.commit()
     except HTTPException:
         db.rollback()
@@ -780,6 +795,13 @@ def update_case_status(
             target_id   = case.case_id,
             request     = request,
         )
+        enqueue_linking(
+            db,
+            case_internal_id=case.id,
+            actor_user_id=user.id,
+            reason="status_changed",
+        )
+ 
         db.commit()
     except Exception:
         db.rollback()
