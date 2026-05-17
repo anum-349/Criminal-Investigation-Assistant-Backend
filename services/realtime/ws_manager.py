@@ -157,8 +157,5 @@ manager = WebSocketManager()
 # `services.notification_events`. We re-export the same name here so the
 # import line in notification_service.py only needs a one-token change.
 def publish(user_id: int, event: Dict[str, Any]) -> int:
-    """Drop-in replacement for the old SSE publish()."""
-    # We tag every payload as a notification event so the client can
-    # distinguish app messages from server-initiated pings.
     payload = {"type": "notification", **event}
-    return manager.publish(user_id, payload)# services/realtime/ws_manager.py
+    return manager.publish(user_id, payload)

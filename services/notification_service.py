@@ -14,7 +14,6 @@ import logging
 # Old: `from services.notification_events import publish as _publish_notification_event`
 # The new module exposes a `publish` function with the same shape; the only
 # difference is the events go over a WebSocket instead of an SSE stream.
-from services.realtime.ws_manager import publish as _publish_notification_event
 
 log = logging.getLogger(__name__)
 
@@ -257,7 +256,9 @@ def push(
  
     def _on_commit(session):
         try:
-            _publish_notification_event(target_user_id, event_payload)
+            from services.realtime.ws_manager import publish
+            print("data:", target_user_id, event_payload)
+            publish(user_id = target_user_id, event=event_payload)
         except Exception:
             log.exception("Failed to publish WS event for user=%s", target_user_id)
  

@@ -8,6 +8,21 @@ from services import notification_service as svc
 
 router = APIRouter()
         
+
+# backend: add a debug route (remove in production)
+@router.post("/notify")
+async def debug_notify(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    svc.push(
+        db,
+        user_id=user.id,
+        type="CASE_UPDATE",
+        title="WS test notification",
+        message="If you see this, WS works end to end.",
+        severity_label="Normal",
+    )
+    db.commit()
+    return {"ok": True}
+
 @router.get("")
 def list_notifications(
     request:   Request,
@@ -74,3 +89,4 @@ def update_preferences(
     user: User    = Depends(get_current_user),
 ):
     return svc.update_preferences(db, user=user, prefs=body)
+

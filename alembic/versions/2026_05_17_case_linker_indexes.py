@@ -24,8 +24,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "2026_05_17_case_linker_indexes"
-down_revision = None  # Set this to your previous head revision
+revision = "2026_05_17"
+down_revision = 'a2b5f90fb0a2'  # Set this to your previous head revision
 branch_labels = None
 depends_on = None
 
