@@ -13,12 +13,12 @@ logger.setLevel(logging.INFO)
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
+_BASE = os.path.dirname(os.path.abspath(__file__))  # fir_api/pipeline/
+_MODELS_DIR = os.path.join(_BASE, "..", "models")    # fir_api/models/
 
-# Model identifiers — pinned for reproducibility.
-# Override via env vars if you want to swap in fine-tuned weights later.
-MARIAN_UR_EN_MODEL = os.getenv("FIR_TRANSLATION_MODEL", "Helsinki-NLP/opus-mt-ur-en")
-SBERT_MODEL        = os.getenv("FIR_EMBEDDING_MODEL",   "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-URDU_NER_MODEL     = os.getenv("FIR_URDU_NER_MODEL",    "mirfan899/uner-uner-mbert")
+MARIAN_UR_EN_MODEL = os.getenv("FIR_TRANSLATION_MODEL", os.path.join(_MODELS_DIR, "opus-mt-ur-en"))
+SBERT_MODEL        = os.getenv("FIR_EMBEDDING_MODEL",   os.path.join(_MODELS_DIR, "paraphrase-multilingual-MiniLM-L12-v2"))
+URDU_NER_MODEL     = os.getenv("FIR_URDU_NER_MODEL",    os.path.join(_MODELS_DIR, "uner-uner-mbert"))
 SPACY_EN_MODEL     = os.getenv("FIR_SPACY_EN_MODEL",    "en_core_web_sm")
 
 # Where transformers cache weights. Set this in Dockerfile so we bake models
@@ -107,7 +107,7 @@ def _load_embedder() -> None:
         models.status["embedder"] = "ready"
         logger.info("✓ Sentence embedder loaded")
     except Exception as e:
-        logger.exception("Embedder failed to load")
+        logger.exception("SBERT failed to load: %s", e)
         models.status["embedder"] = f"error: {e}"
         models.sentence_embedder = None
 
@@ -183,7 +183,7 @@ def _fit_fir_classifier() -> None:
 
     try:
         from sklearn.linear_model import LogisticRegression
-        from pipeline.fir_validator import _build_training_corpus
+        from fir_api.pipeline.fir_validator import _build_training_corpus
 
         texts, labels = _build_training_corpus()
         logger.info("Encoding %d training docs for FIR classifier…", len(texts))

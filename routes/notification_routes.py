@@ -9,7 +9,6 @@ from services import notification_service as svc
 router = APIRouter()
         
 
-# backend: add a debug route (remove in production)
 @router.post("/notify")
 async def debug_notify(db: Session = Depends(get_db), user=Depends(get_current_user)):
     svc.push(

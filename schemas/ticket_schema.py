@@ -1,4 +1,3 @@
-# schemas/ticket_schema.py
 from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime

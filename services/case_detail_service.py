@@ -5,9 +5,8 @@ import secrets
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
-from fastapi import status, Request, HTTPException
+from fastapi import status, Request, HTTPException, BackgroundTasks
 
-from services.case_linker_hook import enqueue_linking
 
 import os                                                        
 from models import AuditLog, CaseDraft, CaseStatus, CaseUpdateFieldChange, CaseUpdateNote, EvidencePhoto, WitnessType                                  
@@ -30,6 +29,7 @@ from schemas.case_detail_schema import (
     TimelineEventOut, AddTimelineResult,
     EvidenceInput, UpdateCaseStatusResponse, VictimInput, WitnessInput,
 )
+from services.case_linker_hook import recompute_links_for_case
 from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _resolve_person, _resolve_case, _format_officer_name, _ymd
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def _timeline_event_type_id(db: Session, code: str) -> Optional[int]:
     return row.id if row else None
 
 def add_suspect(db: Session, *, user: User, case_id: str,
-                request: Optional[Request], suspects: List[SuspectInput]):
+                request: Optional[Request], suspects: List[SuspectInput], background_tasks: BackgroundTasks):
     case = _resolve_case(db, user=user, case_id=case_id)
     created_ids, timeline_out = [], []
 
@@ -167,11 +167,11 @@ def add_suspect(db: Session, *, user: User, case_id: str,
             )
             timeline_out.append(_timeline_to_out(ev, case.case_id))
 
-        enqueue_linking(
+        background_tasks.add_task(
+            recompute_links_for_case,
             db,
-            case_internal_id=case.id,
+            focal_case_internal_id=case.id,
             actor_user_id=user.id,
-            reason="status_changed",
         )
  
         db.commit()
@@ -309,6 +309,7 @@ def add_victim(
     case_id: str,
     request: Optional[Request],
     victims: List[VictimInput],
+    background_tasks: BackgroundTasks,
 ) -> AddTimelineResult:
     case = _resolve_case(db, user=user, case_id=case_id)
 
@@ -398,12 +399,12 @@ def add_victim(
                 audit_target_id=row.victim_id,
             )
             timeline_out.append(_timeline_to_out(ev, case.case_id))
-        enqueue_linking(
-            db,
-            case_internal_id=case.id,
-            actor_user_id=user.id,
-            reason="status_changed",
-        )
+            background_tasks.add_task(
+                recompute_links_for_case,
+                db,
+                focal_case_internal_id=case.id,
+                actor_user_id=user.id,
+            )
  
         db.commit()
     except HTTPException:
@@ -749,6 +750,7 @@ def update_case_status(
     status_code: str,          # ← was status_id: int
     note: Optional[str],
     request: Optional[Request],
+    background_tasks: BackgroundTasks,
 ) -> UpdateCaseStatusResponse:
 
     case = _resolve_case(db, user=user, case_id=case_id)
@@ -795,12 +797,12 @@ def update_case_status(
             target_id   = case.case_id,
             request     = request,
         )
-        enqueue_linking(
-            db,
-            case_internal_id=case.id,
-            actor_user_id=user.id,
-            reason="status_changed",
-        )
+        background_tasks.add_task(
+        recompute_links_for_case,
+        db,
+        focal_case_internal_id=case.id,
+        actor_user_id=user.id,
+    )
  
         db.commit()
     except Exception:

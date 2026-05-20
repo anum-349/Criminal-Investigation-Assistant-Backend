@@ -1,4 +1,3 @@
-# routes/ticket_routes.py
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 

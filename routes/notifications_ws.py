@@ -9,7 +9,6 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-# Adjust these imports to match your project's auth module layout.
 from db import SessionLocal
 from models import User
 from services.realtime.ws_manager import manager

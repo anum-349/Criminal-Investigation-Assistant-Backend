@@ -22,6 +22,9 @@ from schemas.analytics_schema import (
 from services import audit_service as audit
 import logging
 
+from services import predictive_ai_service as pai
+from schemas.predictive_ai_schema import PredictiveAnalyticsResponse
+
 log = logging.getLogger(__name__)
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -433,127 +436,29 @@ def get_heatmap(
 
 
 # ── predictions (statistical only — no ML model yet) ──────────────────────
-
 def get_predictions(
     db: Session, *,
     user,
     request: Optional[Request],
-) -> AnalyticsPredictionsResponse:
+) -> PredictiveAnalyticsResponse:
     """
-    Simple linear-extrapolation forecast until an ML model is wired in.
-    Uses the last 5 months as the historical window and projects 3 months.
+    Predictive analytics endpoint.
+ 
+    Delegates to predictive_ai_service which runs an ensemble of
+    Holt-Winters Exponential Smoothing and linear regression, picks the
+    model with the lower holdout MAPE per series, and additionally:
+ 
+        - Flags anomalous historical months (IQR test)
+        - Detects forecast surges (>=15% above recent baseline)
+        - Clusters recent geocoded incidents into hotspot predictions (DBSCAN)
+        - Returns model metadata (sample size, accuracy, model used)
+ 
+    The response is a *superset* of the legacy AnalyticsPredictionsResponse
+    so the existing Predictions tab keeps working unchanged, and new UI
+    sections (Pattern Alerts, Hotspot Map, model info banner) can be
+    enabled incrementally.
     """
-    today      = date.today()
-    hist_from  = today - timedelta(days=152)   # ~5 months
-
-    cases = (
-        db.query(Case)
-        .filter(
-            Case.is_deleted    == False,
-            Case.incident_date >= hist_from,
-            Case.incident_date <= today,
-        )
-        .all()
-    )
-
-    # Monthly counts for the last 5 months
-    case_by_month: dict = defaultdict(int)
-    for c in cases:
-        if c.incident_date:
-            key = (c.incident_date.year, c.incident_date.month)
-            case_by_month[key] += 1
-
-    hist_months = list(_months_in_range(hist_from, today))[-5:]
-    hist_counts = [case_by_month.get(k, 0) for k in hist_months]
-
-    # Simple linear trend slope
-    n     = len(hist_counts)
-    xs    = list(range(n))
-    mean_x = sum(xs) / n
-    mean_y = sum(hist_counts) / n
-    denom  = sum((x - mean_x) ** 2 for x in xs) or 1
-    slope  = sum((xs[i] - mean_x) * (hist_counts[i] - mean_y) for i in range(n)) / denom
-
-    prediction_trend: list[PredictionTrendItem] = []
-
-    # Historical portion
-    for i, (yr, mo) in enumerate(hist_months):
-        prediction_trend.append(PredictionTrendItem(
-            month = _month_label(yr, mo),
-            cases = hist_counts[i],
-        ))
-
-    # Forecast 3 months
-    yr, mo = hist_months[-1]
-    for step in range(1, 4):
-        mo += 1
-        if mo > 12:
-            mo = 1
-            yr += 1
-        predicted = max(0, round(mean_y + slope * (n - 1 + step)))
-        margin    = round(predicted * 0.15)          # ±15% confidence band
-        prediction_trend.append(PredictionTrendItem(
-            month     = _month_label(yr, mo),
-            predicted = float(predicted),
-            upper     = float(predicted + margin),
-            lower     = float(max(0, predicted - margin)),
-        ))
-
-    # Province forecast
-    province_q = (
-        db.query(Province.label, sa_func.count(Case.id).label("cnt"))
-        .join(Location, Location.province_id == Province.id)
-        .join(Case,     Case.id == Location.case_id_fk)
-        .filter(
-            Case.is_deleted    == False,
-            Case.incident_date >= hist_from,
-            Case.incident_date <= today,
-        )
-        .group_by(Province.label)
-        .order_by(desc("cnt"))
-        .all()
-    )
-    province_forecast = [
-        ProvinceForecastItem(
-            province = label,
-            current  = cnt,
-            forecast = max(0, round(cnt * (1 + slope / max(mean_y, 1) * 0.5))),
-            change   = round(slope / max(mean_y, 1) * 50, 1),
-        )
-        for label, cnt in province_q
-    ]
-
-    # Crime type forecast
-    crime_q = (
-        db.query(CaseType.label, sa_func.count(Case.id).label("cnt"))
-        .join(Case, Case.case_type_id == CaseType.id)
-        .filter(
-            Case.is_deleted    == False,
-            Case.incident_date >= hist_from,
-            Case.incident_date <= today,
-        )
-        .group_by(CaseType.label)
-        .order_by(desc("cnt"))
-        .all()
-    )
-    crime_forecast = [
-        CrimeForecastItem(
-            type     = label,
-            current  = cnt,
-            forecast = max(0, round(cnt * (1 + slope / max(mean_y, 1) * 0.5))),
-            change   = round(slope / max(mean_y, 1) * 50, 1),
-        )
-        for label, cnt in crime_q
-    ]
-
-    _audit(db, user, request, "Viewed analytics predictions")
-
-    return AnalyticsPredictionsResponse(
-        predictionTrend  = prediction_trend,
-        provinceForecast = province_forecast,
-        crimeForecast    = crime_forecast,
-    )
-
+    return pai.run_predictions(db, user=user, request=request)
 
 # ── audit helper ───────────────────────────────────────────────────────────
 

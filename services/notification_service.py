@@ -10,6 +10,8 @@ from sqlalchemy import event as sa_event
 from models import Notification, User, UserPreference, Severity
 import logging
 
+from services.realtime.ws_manager import publish as _ws_publish
+
 # ─── Transport swap: SSE → WebSocket ──────────────────────────────────────
 # Old: `from services.notification_events import publish as _publish_notification_event`
 # The new module exposes a `publish` function with the same shape; the only
@@ -209,7 +211,6 @@ def update_preferences(db: Session, *, user: User, prefs: dict) -> dict:
     return get_preferences(db, user=user)
 # ── Push helper (call from other services) ────────────────────────────────
 
-
 def push(
     db: Session, *,
     user_id:      int,
@@ -223,12 +224,13 @@ def push(
 ) -> Optional[Notification]:
     """Create a Notification row, respecting user preferences.
  
-    On commit, fires a WebSocket event to every connected client for this
-    user (or a no-op if they're offline — the row still persists and they
-    see it on next reconnect / refetch).
+    On commit, publishes a WebSocket event to every connected client for
+    this user (or no-op if they're offline — the row still persists).
     """
     resolved_key = pref_key or PREF_KEY_MAP.get(type)
     if resolved_key and not _pref_enabled(db, user_id, resolved_key):
+        log.info("notif.push SKIPPED for user_id=%s type=%s (pref %s disabled)",
+                 user_id, type, resolved_key)
         return None
  
     n = Notification(
@@ -245,23 +247,28 @@ def push(
     )
     db.add(n)
  
-    # ── Defer the WS publish until the caller commits ──────────────────
-    # Same pattern as before: if the txn rolls back, no event fires.
+    # Capture into locals so the closure doesn't hold the Notification
+    # object (which becomes detached after commit on some configs).
     event_payload = {
-        "type":     type,                  # notification.type, e.g. "CASE_LINKED"
+        "type":     type,
         "title":    title,
         "severity": severity_label,
     }
     target_user_id = user_id
  
     def _on_commit(session):
+        """Fires once the txn commits successfully."""
         try:
-            from services.realtime.ws_manager import publish
-            print("data:", target_user_id, event_payload)
-            publish(user_id = target_user_id, event=event_payload)
+            # Note: _ws_publish takes (user_id, event) as positional args.
+            sent = _ws_publish(target_user_id, event_payload)
+            log.info("WS publish for user_id=%s type=%s reached %d connection(s)",
+                     target_user_id, event_payload["type"], sent)
         except Exception:
-            log.exception("Failed to publish WS event for user=%s", target_user_id)
+            log.exception("WS publish failed for user_id=%s", target_user_id)
  
     sa_event.listen(db, "after_commit", _on_commit, once=True)
+    log.info("notif row queued for user_id=%s type=%s (will publish on commit)",
+             user_id, type)
  
     return n
+ 

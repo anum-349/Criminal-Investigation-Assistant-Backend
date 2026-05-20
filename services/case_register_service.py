@@ -5,8 +5,7 @@ import re
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from fastapi import Request, HTTPException
-from services.case_linker_hook import enqueue_linking
+from fastapi import BackgroundTasks, Request, HTTPException
 
 from models import (
     User, Investigator,
@@ -24,6 +23,7 @@ from schemas.case_register_schema import (
 )
 from schemas.case_detail_schema import TimelineEventOut
 from services import audit_service as audit
+from services.case_linker_hook import recompute_links_for_case
 from services.service_helper import (
     _format_officer_name,
     _resolve_case,
@@ -351,6 +351,7 @@ def register_case(
     user: User,
     body: CaseRegisterRequest,
     request: Optional[Request],
+    background_tasks: BackgroundTasks,
 ) -> CaseRegisterResponse:
     """Create a Case + Location + (optional) crime-type subtype row
     in one transaction. See module docstring for the full picture.
@@ -488,12 +489,11 @@ def register_case(
         )
 
         ev = _log_registration(db, case=case, user=user, request=request)
-        
-        enqueue_linking(
-        db,
-        case_internal_id=case.id,
-        actor_user_id=user.id,
-        reason="case_registered",
+        background_tasks.add_task(
+            recompute_links_for_case,
+            db,
+            focal_case_internal_id=case.id,
+            actor_user_id=user.id,
         )
  
         db.commit()

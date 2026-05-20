@@ -1,24 +1,31 @@
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
-
 class LinkedCaseRow(BaseModel):
-    """One row of the table. Field names match what the JSX reads directly."""
+    """One row in the Linked Cases tab.
+ 
+    Two-tier explanation:
+      • relation        — short headline (one-line narrative, used in the
+                          table cell as-is)
+      • relationDetail  — multi-section markdown breakdown (optional,
+                          shown in expandable drawer)
+    """
     model_config = ConfigDict(from_attributes=True)
-
-    id:           str          # external case_id of the linked case (e.g. "C-10046")
-    linkedCaseId: str          # same as `id` — kept for the Link.state.caseId prop
-    title:        str
-    investigator: str          # "Insp. A. Khan" or "—"
-    registerDate: str          # MM/DD/YYYY (frontend currently shows it as-is)
-    status:       str          # CaseStatus.label, e.g. "Open" / "Closed"
-    relation:     str         
-
-    linkType:        Optional[str]   = None   # raw CaseLink.link_type code
-    similarityScore: Optional[float] = None   # 0.0 – 1.0 (or 0–100, see below)
-    explanation:     Optional[str]   = None
-
-
+ 
+    id: str
+    linkedCaseId: str
+    title: str
+    investigator: str
+    registerDate: str
+    status: str
+ 
+    relation: str                               # headline (always populated)
+    relationDetail: Optional[str] = None        
+ 
+    linkType: str
+    similarityScore: Optional[int] = None       # 0–100
+    explanation: Optional[str] = None           # raw, kept for back-compat
+ 
 class LinkedRelationOption(BaseModel):
     value: str            
     label: str            

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from pipeline.model_loader import models
+from fir_api.pipeline.model_loader import models
 
 logger = logging.getLogger("fir.validator")
 

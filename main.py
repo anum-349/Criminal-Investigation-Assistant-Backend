@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
-from routes import analytics_routes, case_routes, drafts_routes, investigator_route, lookup_routes, main_route, notification_routes, notifications_ws, report_routes, ticket_routes, user_route
+from fir_api.pipeline.model_loader import warmup
+from routes import analytics_routes, case_links_generate, case_routes, drafts_routes, investigator_route, leads_ai_routes, lookup_routes, main_route, notification_routes, notifications_ws, report_routes, ticket_routes, user_route
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ if os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true":
 async def lifespan(app: FastAPI):
     log.info(f"{app.title} v{app.version} starting up")
     log.info(f"Docs available at /docs")
+    warmup()
     yield
     log.info(f"{app.title} shutting down")
 
@@ -75,6 +77,8 @@ app.include_router(analytics_routes.router, prefix="/api/analytics", tags=["Anal
 app.include_router(notification_routes.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(drafts_routes.router, prefix="/api/investigator/cases/case-drafts", tags=["CaseDrafts"])
 app.include_router(lookup_routes.router, prefix="/api/investigator/lookups",      tags=["Lookups"])
+app.include_router(leads_ai_routes.router, prefix="/api/investigator/cases", tags=["AI Leads"])
+app.include_router(case_links_generate.router, prefix="/api/investigator/cases", tags=["case-links"])
 app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
 
 @app.get("/", tags=["Meta"])
@@ -89,8 +93,11 @@ def root():
 
 @app.get("/health", tags=["Meta"])
 def health():
-    """Lightweight liveness probe. Doesn't touch the DB to stay fast."""
-    return {"status": "ok"}
+    from fir_api.pipeline.model_loader import models, is_ready
+    return {
+        "status": "ok" if is_ready() else "degraded",
+        "models": models.status,
+    }
 
 
 @app.get("/health/db", tags=["Meta"])

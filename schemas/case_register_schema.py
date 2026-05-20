@@ -102,11 +102,9 @@ class CaseRegisterRequest(BaseModel):
     firType:     Optional[str]  = "FIR"
     manualEntry: Optional[bool] = False
 
-    # ── Nested ─────────────────────────────────────────────────────────
     location: CaseLocationInput = Field(default_factory=CaseLocationInput)
     crime:    CrimeDetailsInput = Field(default_factory=CrimeDetailsInput)
 
-    # ── Validators ─────────────────────────────────────────────────────
     @field_validator("incidentDate", "reportingDate")
     @classmethod
     def _check_date_format(cls, v: Optional[str]):
@@ -133,7 +131,6 @@ class CaseRegisterRequest(BaseModel):
             if value is None or (isinstance(value, str) and not value.strip()):
                 missing.append(field_name)
 
-        # Step 2 — Case Details
         need("firNumber",     self.firNumber)
         need("caseTitle",     self.caseTitle)
         need("caseType",      self.caseType)
@@ -142,13 +139,11 @@ class CaseRegisterRequest(BaseModel):
         need("incidentDate",  self.incidentDate)
         need("reportingDate", self.reportingDate)
 
-        # Step 3 — Location
         if self.location:
             need("location.province", self.location.province)
             need("location.city",     self.location.city)
             need("location.address",  self.location.address)
 
-        # Step 6 — Crime Details
         if self.crime:
             need("crime.crimeDescription", self.crime.crimeDescription)
 
@@ -160,26 +155,14 @@ class CaseRegisterRequest(BaseModel):
         return self
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Response body
-# ──────────────────────────────────────────────────────────────────────────
-
 class CaseRegisterResponse(BaseModel):
     """Returned by POST /api/investigator/cases."""
     model_config = ConfigDict(from_attributes=True)
 
     case_id:    str       # external case_id, e.g. "C-2053"
     fir_number: str
-    # The system "CASE_REGISTERED" timeline event(s) the service writes
-    # at create-time. The frontend doesn't need to use these immediately,
-    # but they're handy if you want to render the timeline right after
-    # the wizard completes without an extra GET round-trip.
     timeline_events: list = []
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Follow-up FIR file upload
-# ──────────────────────────────────────────────────────────────────────────
 
 class FIRFileUploadRequest(BaseModel):
     """Body for PATCH /api/investigator/cases/{caseId}/fir-file.

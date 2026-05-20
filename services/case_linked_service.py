@@ -19,6 +19,14 @@ from schemas.case_linked_schema import (
 from services.service_helper import _resolve_case
 
 LINK_TYPE_LABEL = {
+    "SUSPECT_MATCH":    ("Same Suspect",       "danger"),
+    "VICTIM_MATCH":     ("Same Victim",        "warning"),
+    "WEAPON_MATCH":     ("Same Weapon",        "warning"),
+    "LOCATION_MATCH":   ("Same Location",      "info"),
+    "MODUS_MATCH":      ("Matching MO",        "info"),
+    "CRIME_TYPE_MATCH": ("Same Crime Type",    "default"),
+    "EVIDENCE_MATCH":   ("Evidence Overlap",   "default"),
+    "TEMPORAL":         ("Temporal Proximity", "default"),
     "SAME_SUSPECT":  ("Same Suspect",        "danger"),
     "SAME_VICTIM":   ("Same Victim",         "warning"),
     "SAME_WEAPON":   ("Same Weapon",         "warning"),
@@ -27,6 +35,18 @@ LINK_TYPE_LABEL = {
     "TEMPORAL":      ("Temporal Proximity",  "default"),
     "OTHER":         ("Related",             "default"),
 }
+
+_DETAIL_MARKER = "\n\n---DETAIL---\n\n"
+
+def _split_explanation(raw: Optional[str]):
+    """Return (headline, detail). detail is None if the row predates the
+    two-tier format."""
+    if not raw:
+        return (None, None)
+    if _DETAIL_MARKER in raw:
+        headline, detail = raw.split(_DETAIL_MARKER, 1)
+        return (headline.strip(), detail.strip())
+    return (raw.strip(), None)
 
 def _status_variant(label: str) -> str:
     s = (label or "").lower()
@@ -53,35 +73,35 @@ def _format_date(d):
         return "—"
     return d.strftime("%m/%d/%Y")
 
-
 def _row_from_link(link: CaseLink, other_case: Case) -> LinkedCaseRow:
-    """Build one frontend row from a CaseLink + the 'other' case.
+    """Build one frontend row.
  
-    Field mapping for the table the React page renders:
-      id            ← other_case.case_id (external ID, e.g. "C-10046")
-      title         ← other_case.case_title
-      investigator  ← rank + username of the assigned investigator
-      registerDate  ← created_at as MM/DD/YYYY
-      relation      ← explanation if set, else human label of link_type
-      confidence    ← similarity_score as a 0–100 integer (was 0–1 float)
+    Field mapping:
+      id              ← other_case.case_id (external, e.g. "C-10046")
+      title           ← other_case.case_title
+      investigator    ← rank + username of the assigned investigator
+      registerDate    ← created_at as MM/DD/YYYY
+      relation        ← headline (one-sentence narrative)
+      relationDetail  ← multi-section markdown (NEW, optional)
+      similarityScore ← 0–100 int (was 0–1 float in DB)
+      linkType        ← machine code (e.g. "SUSPECT_MATCH")
     """
     label, _variant = LINK_TYPE_LABEL.get(
         link.link_type,
         (link.link_type.replace("_", " ").title(), "default"),
     )
  
-    relation_text = (link.explanation or "").strip() or label
+    headline, detail = _split_explanation(link.explanation)
+    # If the headline is empty/missing, fall back to the link-type label
+    # so the table never shows a blank cell.
+    relation_text = headline or label
  
-    # Confidence: engine writes 0.0–1.0; frontend table column is 0–100.
-    # We convert here so neither side has to change.
     raw = link.similarity_score
     if raw is None:
         confidence_pct: Optional[int] = None
     elif raw <= 1.0:
         confidence_pct = int(round(raw * 100))
     else:
-        # Already on 0–100 (e.g., manually entered via the "Link Cases"
-        # dialog) — leave it.
         confidence_pct = int(round(raw))
  
     return LinkedCaseRow(
@@ -92,11 +112,12 @@ def _row_from_link(link: CaseLink, other_case: Case) -> LinkedCaseRow:
         registerDate=_format_date(other_case.created_at),
         status=other_case.case_status.label if other_case.case_status else "—",
         relation=relation_text,
+        relationDetail=detail,       # ← new field (see schema patch below)
         linkType=link.link_type,
         similarityScore=confidence_pct,
         explanation=link.explanation,
     )
-
+ 
 def _gather_links(db: Session, case: Case) -> List[Tuple[CaseLink, Case]]:
     """Pull both directions of the link, eager-loading what we need."""
     OtherCaseAlias = aliased(Case)

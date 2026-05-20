@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, Float, DateTime, Date,
+    Column, Integer, LargeBinary, String, Text, Boolean, Float, DateTime, Date,
     ForeignKey, JSON, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship
@@ -530,7 +530,11 @@ class Case(Base):
     activities = relationship(
         "Activity", back_populates="case", cascade="all, delete-orphan"
     )
-    
+    embedding = relationship(
+        "CaseEmbedding", uselist=False, back_populates="case",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
 # SECTION 5 — CRIME-TYPE SUBTYPES (1:1 with Case)
 class MurderDetails(Base):
     __tablename__ = "murder_details"
@@ -1092,6 +1096,34 @@ class CaseLink(Base):
         UniqueConstraint("source_case_id", "target_case_id", "link_type", name="uq_case_link"),
     )
 
+class CaseEmbedding(Base):
+    """Cached SBERT (MiniLM multilingual) embedding for a case's narrative.
+ 
+    Why a separate table:
+      • Vector is 1.5 KB — we don't want it on every Case SELECT.
+      • model_version lets us invalidate / re-backfill cleanly when the
+        embedder is upgraded.
+      • Easy to drop and rebuild without touching the cases table.
+ 
+    Recomputed by services.semantic_similarity.get_embedding(),
+    invalidated by services.semantic_similarity.invalidate() when major
+    narrative fields change (motive, MO, description, weapon).
+    """
+    __tablename__ = "case_embeddings"
+ 
+    id = Column(Integer, primary_key=True)
+    case_id_fk = Column(
+        Integer,
+        ForeignKey("cases.id", ondelete="CASCADE"),
+        unique=True, nullable=False,
+    )
+    vector          = Column(LargeBinary, nullable=False)
+    model_version   = Column(String(40), nullable=False, default="minilm-multilingual-v1")
+    narrative_chars = Column(Integer, nullable=True)
+    computed_at     = Column(DateTime, default=datetime.now(UTC))
+ 
+    case = relationship("Case", back_populates="embedding")
+   
 class CaseLinkSharedEntity(Base):
     __tablename__ = "case_link_shared_entities"
 

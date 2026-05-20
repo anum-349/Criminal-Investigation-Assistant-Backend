@@ -91,7 +91,7 @@ class SuspectRow(BaseModel):
     arrivalMethod:       Optional[str] = None
     vehicleDescription:  Optional[str] = None
     notes:               Optional[str] = None
-    photoUrl:            Optional[str] = None    # ← added
+    photoUrl:            Optional[str] = None    
 
 
 class UpdateSuspectRequest(BaseModel):
