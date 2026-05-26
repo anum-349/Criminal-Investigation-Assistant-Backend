@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from pipeline.model_loader import models
+from fir_api.pipeline.model_loader import models
 
 logger = logging.getLogger("fir.entities")
 
@@ -12,15 +12,7 @@ logger = logging.getLogger("fir.entities")
 # ═════════════════════════════════════════════════════════════════════════════
 # Regex patterns — Pakistani FIR format
 # ═════════════════════════════════════════════════════════════════════════════
-#
-# Notes on Urdu regex:
-#   • \u0600-\u06FF covers Arabic + Urdu base
-#   • Pakistani FIRs are typed in Nastaliq fonts; OCR introduces variation
-#     between Arabic-form letters and Urdu-form letters of the same character.
-#     The character classes below cover both.
-#   • Punjabi/Sindhi loanwords use \u0750-\u077F (extended Arabic).
 
-# ── FIR number — handles NNN/YY, NNN/YYYY, with optional station prefix ─────
 RE_FIR_NO = re.compile(
     r"(?:"
     r"fir(?:\s+no\.?|\s+number|\s*#)?|"
@@ -34,42 +26,37 @@ RE_FIR_NO = re.compile(
     re.I,
 )
 
-# Bare "108/25" pattern when it appears after a column label like "نمبر:"
 RE_FIR_NO_BARE = re.compile(
     r"(?:^|\n|\s)(\d{2,5}\s*/\s*\d{2,4})(?:\s|$|\n)",
 )
 
-# ── Date — Pakistani formats include 22-02-2025, 22/02/2025, ۲۲-۰۲-۲۰۲۵ ─────
 RE_DATE = re.compile(
     r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b|"
     r"\b((?:january|february|march|april|may|june|july|august|"
     r"september|october|november|december)\s+\d{1,2}(?:,?\s+\d{4})?)\b|"
     r"\b(\d{1,2}\s+(?:january|february|march|april|may|june|july|august|"
     r"september|october|november|december)(?:,?\s+\d{4})?)\b|"
-    r"([\u06F0-\u06F9]{1,2}[\-\/][\u06F0-\u06F9]{1,2}[\-\/][\u06F0-\u06F9]{2,4})",  # Urdu-numeral dates
+    r"([\u06F0-\u06F9]{1,2}[\-\/][\u06F0-\u06F9]{1,2}[\-\/][\u06F0-\u06F9]{2,4})",
     re.I,
 )
 
-# ── Time — 12:30 PM, 03:50PM, 22:30 hrs, etc. ───────────────────────────────
 RE_TIME = re.compile(
     r"\b(\d{1,2}\s*[:.]\s*\d{2}\s*(?:am|pm|hrs?|hours|بجے)?)\b|"
     r"\b(\d{4}\s*(?:hrs?|hours))\b",
     re.I,
 )
 
-# ── Police station — handles "ٹھانہ مری", "Thana Saddar", "PS Gulberg" ──────
 RE_POLICE_STATION = re.compile(
     r"(?:"
     r"police\s+station|p\.?s\.?|"
     r"thana|"
     r"ٹھانہ|تھانہ|قائمہ"
     r")\s*[:\-]?\s*"
-    r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\.]{2,40}?)"
-    r"(?=[,\n\r]|district|ضلع|sec|دفعہ|$)",
+    r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\.]{2,60}?)"
+    r"(?=[,\n\r]|circle|district|ضلع|sec|دفعہ|$)",
     re.I,
 )
 
-# ── District — "ضلع مری", "District Karachi" ────────────────────────────────
 RE_DISTRICT = re.compile(
     r"(?:district|zila|ضلع)\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s]{2,30}?)"
@@ -77,7 +64,6 @@ RE_DISTRICT = re.compile(
     re.I,
 )
 
-# ── Tehsil (sub-district) — common in Pakistani FIRs, missing from v1 ───────
 RE_TEHSIL = re.compile(
     r"(?:tehsil|تحصیل)\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s]{2,30}?)"
@@ -93,41 +79,46 @@ RE_PROVINCE = re.compile(
     re.I,
 )
 
-# ── CNIC — Pakistani national ID strictly 5-7-1 ─────────────────────────────
 RE_CNIC = re.compile(r"\b(\d{5}\s*[\-]?\s*\d{7}\s*[\-]?\s*\d)\b")
 
-# ── Phone — Pakistani mobile (03xx-xxxxxxx) or landline ─────────────────────
+# FIX: RE_PHONE — must match a Pakistani mobile/landline format only.
+# Old pattern matched bare digit sequences including IMEI numbers.
+# Now requires the number to start with 0 (Pakistani) or +92, with 10-11 digits.
 RE_PHONE = re.compile(
-    r"(?:phone|mobile|contact|tel|cell|موبائل|فون|رابطہ)?\s*[:\-]?\s*"
+    r"(?:phone|mobile|contact|tel|cell|موبائل|فون|رابطہ)\s*[:\-]?\s*"
     r"(\+?92[-\s]?\d{3}[-\s]?\d{7}|"
     r"0\d{3}[-\s]?\d{7}|"
-    r"\d{4}[-\s]?\d{7})",
+    r"0\d{2}[-\s]?\d{7,8})",
     re.I,
 )
 
-# Standalone Pakistani mobile (no label) — fallback
-RE_PHONE_BARE = re.compile(r"\b(03\d{2}\s*[\-]?\s*\d{7})\b|\b(\+92\s*3\d{2}\s*\d{7})\b")
+# FIX: RE_PHONE_BARE — explicit 03xx start (11 digits), so IMEI (14+ digits) won't match.
+RE_PHONE_BARE = re.compile(
+    r"\b(03\d{2}[\-\s]?\d{3}[\-\s]?\d{4})\b"
+    r"|\b(\+92[\-\s]?3\d{2}[\-\s]?\d{3}[\-\s]?\d{4})\b"
+)
 
-# ── Age — "عمر 30 سال", "Age 34", "aged 12" ─────────────────────────────────
 RE_AGE = re.compile(r"\b(?:age|aged|عمر)\s*[:\-]?\s*(\d{1,3})\s*(?:years?|سال)?", re.I)
 
-# ── Father / husband — KEY PAKISTANI PATTERN ────────────────────────────────
-# "Muhammad Ali s/o Akram" OR "محمد علی ولد اکرم" OR "Saima Bibi w/o Iqbal"
-# OR "زوجہ" (wife of), "بنت" (daughter of)
+# FIX: RE_FATHER — the old pattern fired on "s/o" appearing inside words like
+# "software", extracting garbage like "ftware".  Added a word-boundary assertion
+# before the s/o abbreviation and tightened the separator requirement.
 RE_FATHER = re.compile(
+    r"(?<![a-z])"            # negative lookbehind: not preceded by a-z (catches "soft**ware**")
     r"\b(?:"
-    r"s/?o|d/?o|w/?o|son\s+of|daughter\s+of|wife\s+of|"
-    r"ولد(?:یت)?|"        # walad (son of) / waldiyat
-    r"بنت|"               # bint (daughter of)
-    r"زوجہ|"              # zoja (wife of)
-    r"اہلیہ"              # ahliya (wife of, formal)
-    r")\s*[:\-]?\s*"
+    r"s/o|d/o|w/o|"
+    r"son\s+of|daughter\s+of|wife\s+of|"
+    r"ولد(?:یت)?|"
+    r"بنت|"
+    r"زوجہ|"
+    r"اہلیہ"
+    r")\b"
+    r"\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\.]{1,50}?)"
     r"(?=[,\n\r]|age|cnic|عمر|شناختی|موبائل|سکنہ|caste|$)",
     re.I,
 )
 
-# ── Caste (ذات) — useful Pakistani FIR field ────────────────────────────────
 RE_CASTE = re.compile(
     r"(?:caste|قوم|ذات)\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s]{2,30}?)"
@@ -135,7 +126,6 @@ RE_CASTE = re.compile(
     re.I,
 )
 
-# ── Profession (پیشہ) — common Pakistani FIR field ─────────────────────────
 RE_PROFESSION = re.compile(
     r"(?:profession|occupation|پیشہ|پیشے|peshay?)\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s]{2,40}?)"
@@ -143,7 +133,6 @@ RE_PROFESSION = re.compile(
     re.I,
 )
 
-# ── Residence / address — "سکنہ", "resident of", "محلہ" ────────────────────
 RE_RESIDENCE = re.compile(
     r"(?:"
     r"resident\s+of|address|"
@@ -155,8 +144,6 @@ RE_RESIDENCE = re.compile(
     re.I,
 )
 
-# ── Place of incident with distance from PS (Pakistani-specific) ────────────
-# "جائے وقوعہ بمسافت 10 کلومیٹر مشرق ٹھانہ" or "10 km east of PS"
 RE_INCIDENT_PLACE = re.compile(
     r"(?:"
     r"place\s+of\s+(?:incident|occurrence)|"
@@ -169,7 +156,6 @@ RE_INCIDENT_PLACE = re.compile(
     re.I | re.DOTALL,
 )
 
-# Distance from police station (column 4 typically has this)
 RE_DISTANCE_FROM_PS = re.compile(
     r"(?:بمسافت|پر|distance\s+of|approximately)\s*"
     r"(\d+(?:\.\d+)?)\s*"
@@ -178,16 +164,12 @@ RE_DISTANCE_FROM_PS = re.compile(
     re.I,
 )
 
-# Beat / Police Chowki (sub-station within PS jurisdiction)
 RE_BEAT = re.compile(
     r"(?:beat|بیلٹ|پولیس\s*چوکی|chowki|چوکی)\s*[:\-]?\s*"
     r"([A-Za-z\u0600-\u06FF\d][A-Za-z\u0600-\u06FF\d\s\.\-/]{1,30}?)"
     r"(?=[,\n\r]|$)",
     re.I,
 )
-
-# ── Person role labels ──────────────────────────────────────────────────────
-# Pakistani FIRs use very specific role terms. Multiple persons are common.
 
 RE_COMPLAINANT_LABEL = re.compile(
     r"(?:"
@@ -200,7 +182,6 @@ RE_COMPLAINANT_LABEL = re.compile(
     re.I,
 )
 
-# Accused — Pakistani FIRs list multiple, often with نامعلوم (unknown)
 RE_ACCUSED_LABEL = re.compile(
     r"(?:^|\n|\.|،)\s*"
     r"(?:accused(?:\s+person(?:s)?)?|suspect|culprit|"
@@ -212,7 +193,6 @@ RE_ACCUSED_LABEL = re.compile(
     re.I | re.MULTILINE,
 )
 
-# Specifically catch "نامعلوم" (unknown) accused — common in street crime
 RE_ACCUSED_UNKNOWN = re.compile(
     r"(?:accused|mulzim|ملزم(?:ان|ین)?)\s*[:\-]?\s*"
     r"(unknown|نامعلوم|na[\s\-]?maloom)"
@@ -242,9 +222,6 @@ RE_WITNESS_LABEL = re.compile(
     re.I,
 )
 
-# ── Legal: sections + acts (Pakistani-specific) ─────────────────────────────
-# Handles: "Section 392 PPC", "u/s 302/34 PPC", "دفعہ 302/34 ت پ",
-# "Section 392, 397 r/w 7 ATA", "302/34 PPC"
 RE_SECTION = re.compile(
     r"(?:"
     r"section|"
@@ -256,9 +233,10 @@ RE_SECTION = re.compile(
     re.I,
 )
 
-# Sections appearing in a numbered list (col 3 of the form, where 324, 148, 149
-# might appear on separate lines under a label)
-RE_SECTION_LIST_ITEM = re.compile(r"(?:^|\n)\s*(\d{2,4})\s*(?:ت\s*پ|ppc|crpc|ata)?", re.I | re.MULTILINE)
+RE_SECTION_LIST_ITEM = re.compile(
+    r"(?:^|\n)\s*(\d{2,4})\s*(?:ت\s*پ|ppc|crpc|peca|ata)?",
+    re.I | re.MULTILINE,
+)
 
 RE_ACT = re.compile(
     r"\b("
@@ -268,19 +246,17 @@ RE_ACT = re.compile(
     r"(?:anti[\-\s]?)?terrorism\s+act|ata|انسداد\s*دہشت\s*گردی|"
     r"control\s+of\s+narcotics?\s+substances?\s+act|cnsa|"
     r"hudood\s+ordinance|حدود|"
-    r"electronic\s+crimes\s+act|peca|peda"
+    r"(?:prevention\s+of\s+)?electronic\s+crimes\s+act|peca|peda|"
+    r"peca\s*20\d{2}"
     r")\b",
     re.I,
 )
 
-# "read with" / "متعلقہ" — links sections to act
 RE_SECTION_RW = re.compile(
     r"(\d+(?:[\s,/]+\d+)*)\s*(?:r/?w|read\s+with|متعلقہ)\s*(\d+(?:[\s,/]+\d+)*)",
     re.I,
 )
 
-# ── Offence type ────────────────────────────────────────────────────────────
-# Extended for Pakistani crime taxonomy
 RE_OFFENCE = re.compile(
     r"\b("
     r"murder|qatal|قتل|homicide|"
@@ -299,12 +275,14 @@ RE_OFFENCE = re.compile(
     r"firing|aerial\s+firing|فائرنگ|"
     r"trespass|illegal\s+entry|غیر\s*قانونی\s*مداخلت|"
     r"family\s+dispute|خاندانی\s*جھگڑا|"
-    r"land\s+dispute|زمین\s*کا\s*تنازعہ"
+    r"land\s+dispute|زمین\s*کا\s*تنازعہ|"
+    r"cyber\s+crime|cyber\s+fraud|"
+    r"unauthorized\s+access|unauthorized\s+transmission|"
+    r"unfair\s+means|cheating\s+in\s+examination|electronic\s+crime"
     r")\b",
     re.I,
 )
 
-# ── Weapons (extended for Pakistani context) ────────────────────────────────
 RE_WEAPON = re.compile(
     r"\b("
     r"pistol|revolver|rifle|gun|firearm|بندوق|پستول|"
@@ -314,16 +292,16 @@ RE_WEAPON = re.compile(
     r"grenade|explosive|bomb|ied|دستی\s*بم|بم|"
     r"baton|stick|lathi|لاٹھی|iron\s+rod|سریا|stone|پتھر|"
     r"acid|تیزاب|"
-    r"اسلحہ|اسلحہ\s*ناجائز"      # generic "arms" / "illegal arms"
+    r"اسلحہ|اسلحہ\s*ناجائز"
     r")\b",
     re.I,
 )
 
-# ── Vehicles + plates ───────────────────────────────────────────────────────
 RE_VEHICLE = re.compile(
     r"\b(motor[\s\-]?cycle|motor[\s\-]?bike|bike|"
     r"موٹر\s*سائیکل|موٹرسائیکل|"
     r"car|sedan|suv|jeep|گاڑی|کار|"
+    r"suzuki|honda|toyota|corolla|cultus|mehran|swift|spacia|"
     r"truck|van|bus|pickup|trolley|"
     r"rickshaw|auto|qingqi|چنگچی|رکشہ|"
     r"taxi|cab|"
@@ -331,19 +309,19 @@ RE_VEHICLE = re.compile(
     re.I,
 )
 
+# FIX: RE_PLATE — the old pattern stopped at 2 alpha chars after hyphen, so
+# "LEE-17-1316" was cut to "LEE-17".  Extended to capture full Pakistani plate
+# format including multiple hyphen groups.
 RE_PLATE = re.compile(
-    r"\b([A-Z]{2,4}[\s\-]?\d{3,5}|"        # standard: LHR-2345
-    r"[A-Z]{2,4}[\s\-]?\d{2,3}[\s\-]?[A-Z]?|"
-    r"\d{3,4}[\s\-]?[A-Z]{2,4})\b"         # alternate: 2345 LHR
+    r"\b([A-Z]{2,4}[\s\-]\d{2,5}(?:[\s\-][A-Z0-9]{1,6})*)\b"
 )
 
-# ── Investigating Officer rank + name ───────────────────────────────────────
-# Pakistani police hierarchy: IGP > AIGP > DIG > SSP > SP > DSP > ASP > Insp > SI > ASI > HC > Constable
 RE_IO_RANK = re.compile(
     r"\b("
     r"IGP|AIGP|DIG|SSP|SP|DSP|ASP|"
     r"inspector|insp|sub[\-\s]?inspector|si|"
     r"assistant\s+sub[\-\s]?inspector|asi|"
+    r"assistant\s+director|additional\s+director|deputy\s+director|"
     r"head\s+constable|hc|"
     r"constable|"
     r"sho|"
@@ -354,23 +332,31 @@ RE_IO_RANK = re.compile(
     re.I,
 )
 
-# IO name preceded by clear "I.O." label
+# FIX: RE_IO_NAME — the old pattern matched "i.o." inside common words like
+# "information" (the substring "ion" → no, but "transmission of information"
+# triggered because "i" + ".o." was found).  The real issue is the pattern
+# has no word-boundary on the right of the abbreviation.  Also added
+# "entrusted to" phrasing common in English FIRs.
 RE_IO_NAME = re.compile(
-    r"(?:i\.?o\.?|investigating\s+officer|تفتیشی\s*افسر|انچارج)"
+    r"(?:"
+    r"(?:investigation\s+is\s+)?entrusted\s+to|"
+    r"\bi\.?o\.?\b|"
+    r"investigating\s+officer|"
+    r"تفتیشی\s*افسر|"
+    r"انچارج"
+    r")"
     r"\s*[:\-]?\s*"
-    r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\.]{2,40}?)"
-    r"(?=[,\n\r]|signature|دستخط|$)",
+    r"([A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\.]{2,50}?)"
+    r"(?=[,\n\r]|signature|دستخط|assistant|$)",
     re.I,
 )
 
-# Belt number — common in Pakistani FIRs (officer's badge/posting number)
 RE_BELT_NUMBER = re.compile(
     r"(?:belt|بیلٹ\s*نمبر|بیلٹ)\s*(?:no\.?|number|نمبر)?\s*[:\-]?\s*"
     r"(\d{2,5}\s*[/]?\s*[A-Z]?)",
     re.I,
 )
 
-# ── Hospital / MLC reference (common in injury FIRs) ────────────────────────
 RE_HOSPITAL = re.compile(
     r"\b(THQ|DHQ|RHC|BHU|"
     r"tehsil\s+headquarters?\s+hospital|"
@@ -396,279 +382,245 @@ def _first(pat: re.Pattern, text: str) -> Optional[str]:
 
 
 def _all(pat: re.Pattern, text: str) -> List[str]:
-    out, seen = [], set()
+    results = []
     for m in pat.finditer(text):
         for g in m.groups():
             if g and g.strip():
-                v = g.strip()
-                key = v.lower()
-                if key not in seen:
-                    out.append(v)
-                    seen.add(key)
+                results.append(g.strip())
                 break
-    return out
+    return results
 
 
-def _snippet(text: str, value: str, window: int = 30) -> str:
-    if not value:
+def _snippet(text: str, value: str, context: int = 60) -> str:
+    if not value or not text:
         return ""
-    idx = text.lower().find(value.lower())
-    if idx < 0:
-        return value
-    start, end = max(0, idx - window), min(len(text), idx + len(value) + window)
-    return text[start:end].replace("\n", " ").strip()
+    idx = text.find(value)
+    if idx == -1:
+        return ""
+    start = max(0, idx - context)
+    end   = min(len(text), idx + len(value) + context)
+    return text[start:end].replace("\n", " ")
 
 
-def _evidence(field_name: str, value: Any, method: str, snippet: str = "") -> Dict:
+def _evidence(field: str, value: Any, method: str, snippet: str) -> Dict:
+    has_value = bool(value) if not isinstance(value, list) else len(value) > 0
     return {
-        "field":             field_name,
-        "extracted_value":   value,
+        "field":            field,
+        "extracted_value":  value,
         "extraction_method": method,
-        "snippet":           snippet[:120],
-        "confidence":        "high" if value else "none",
+        "snippet":          snippet,
+        "confidence":       "high" if has_value else "none",
     }
 
 
-def _normalise_urdu_digits(text: str) -> str:
-    """Convert Urdu-Persian digits (۰-۹) to ASCII (0-9). FIRs sometimes mix
-    both — normalising lets the date/CNIC/phone regexes catch them."""
-    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    return text.translate(table)
-
-
 # ═════════════════════════════════════════════════════════════════════════════
-# NER backends
+# spaCy NER helper
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _spacy_persons_locations(text: str) -> Dict[str, List[str]]:
+def _spacy_ents(text: str) -> Dict[str, List[str]]:
     nlp = models.spacy_nlp
     if nlp is None:
-        return {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-    try:
-        doc = nlp(text[:50_000])
-    except Exception as e:
-        logger.warning("spaCy NER failed: %s", e)
-        return {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-
-    buckets: Dict[str, List[str]] = {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-    seen: Dict[str, set] = {k: set() for k in buckets}
+        return {"PERSON": [], "ORG": [], "GPE": [], "LOC": [], "DATE": []}
+    doc = nlp(text[:10000])
+    result: Dict[str, List[str]] = {"PERSON": [], "ORG": [], "GPE": [], "LOC": [], "DATE": []}
     for ent in doc.ents:
-        if ent.label_ in buckets:
-            v = ent.text.strip()
-            if v and v.lower() not in seen[ent.label_] and len(v) > 1:
-                buckets[ent.label_].append(v)
-                seen[ent.label_].add(v.lower())
-    return buckets
-
-
-def _urdu_ner_persons_locations(text: str) -> Dict[str, List[str]]:
-    pipe = models.urdu_ner_pipeline
-    if pipe is None:
-        return {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-    try:
-        # mBERT max position = 512 tokens; chunk if longer
-        entities = pipe(text[:5000])
-    except Exception as e:
-        logger.warning("Urdu NER failed: %s", e)
-        return {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-
-    buckets = {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-    seen: Dict[str, set] = {k: set() for k in buckets}
-    label_map = {
-        "PER": "PERSON", "PERSON": "PERSON",
-        "LOC": "LOC", "LOCATION": "LOC",
-        "GPE": "GPE",
-        "ORG": "ORG", "ORGANIZATION": "ORG",
-    }
-    for ent in entities:
-        raw_label = (ent.get("entity_group") or ent.get("entity", "")).split("-")[-1]
-        label = label_map.get(raw_label.upper())
-        if not label:
-            continue
-        v = (ent.get("word") or "").strip()
-        if v and v.lower() not in seen[label]:
-            buckets[label].append(v)
-            seen[label].add(v.lower())
-    return buckets
+        if ent.label_ in result:
+            result[ent.label_].append(ent.text.strip())
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Public API
+# Main extractor
 # ═════════════════════════════════════════════════════════════════════════════
 
-def extract_entities(text: str, original_text: Optional[str] = None) -> Dict[str, Any]:
-    """Pakistani-FIR-tuned extraction. Returns the canonical envelope the
-    orchestrator and frontend consume."""
-    if not text or not text.strip():
+def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
+    """Extract all structured fields from `text` (English translation or raw).
+
+    `original_text` is the raw OCR output — regex patterns that target Urdu
+    script run against it while spaCy / English patterns run against `text`.
+    """
+    if not text or len(text.strip()) < 10:
         return _empty_result()
 
-    # Normalise digits once for the whole pipeline so regex hits both scripts
-    t = _normalise_urdu_digits(text)
-    orig = _normalise_urdu_digits(original_text) if original_text else None
-
+    t    = text        # English text (for English patterns + spaCy)
+    orig = original_text or text   # Urdu/mixed OCR (for Urdu-script patterns)
     xai: List[Dict] = []
 
-    # ── Header / FIR identifier ─────────────────────────────────────────────
-    fir_no = _first(RE_FIR_NO, t) or _first(RE_FIR_NO_BARE, t)
+    # ── FIR Number ────────────────────────────────────────────────────────────
+    fir_no = _first(RE_FIR_NO, t) or _first(RE_FIR_NO, orig)
+    if not fir_no:
+        m = RE_FIR_NO_BARE.search(t) or RE_FIR_NO_BARE.search(orig)
+        fir_no = m.group(1).replace(" ", "") if m else None
+
     xai.append(_evidence("firNumber", fir_no, "regex:RE_FIR_NO", _snippet(t, fir_no or "")))
 
-    # ── Dates: try to capture BOTH date-of-report and date-of-incident ──────
+    # ── Dates ─────────────────────────────────────────────────────────────────
     all_dates = _all(RE_DATE, t)
-    # Heuristic: first date is usually date-of-report (top of form),
-    # later dates within narrative are date-of-incident.
-    date_of_report   = all_dates[0] if all_dates else None
-    date_of_incident = all_dates[1] if len(all_dates) > 1 else all_dates[0] if all_dates else None
-    all_times = _all(RE_TIME, t)
-    time_of_incident = all_times[0] if all_times else None
+    date_of_report   = all_dates[0] if len(all_dates) >= 1 else None
+    date_of_incident = all_dates[1] if len(all_dates) >= 2 else date_of_report
 
-    xai.append(_evidence("dateOfReport",     date_of_report,    "regex:RE_DATE[0]", ""))
-    xai.append(_evidence("dateOfIncident",   date_of_incident,  "regex:RE_DATE[1]", ""))
-    xai.append(_evidence("timeOfIncident",   time_of_incident,  "regex:RE_TIME[0]", ""))
+    xai.append(_evidence("dateOfReport",   date_of_report,   "regex:RE_DATE[0]", ""))
+    xai.append(_evidence("dateOfIncident", date_of_incident, "regex:RE_DATE[1]", ""))
 
-    # ── Location hierarchy ──────────────────────────────────────────────────
-    police_station = _first(RE_POLICE_STATION, t)
-    district       = _first(RE_DISTRICT, t)
-    tehsil         = _first(RE_TEHSIL, t)
-    province       = _first(RE_PROVINCE, t)
-    incident_place = _first(RE_INCIDENT_PLACE, t)
-    beat           = _first(RE_BEAT, t)
+    # ── Time ──────────────────────────────────────────────────────────────────
+    time_of_incident = _first(RE_TIME, t)
+    xai.append(_evidence("timeOfIncident", time_of_incident, "regex:RE_TIME[0]", ""))
 
-    # Distance + direction from PS
-    dist_m = RE_DISTANCE_FROM_PS.search(t)
+    # ── Location fields ───────────────────────────────────────────────────────
+    police_station = _first(RE_POLICE_STATION, t) or _first(RE_POLICE_STATION, orig)
+    district       = _first(RE_DISTRICT, t)       or _first(RE_DISTRICT, orig)
+    tehsil         = _first(RE_TEHSIL,   t)       or _first(RE_TEHSIL,   orig)
+    province       = _first(RE_PROVINCE, t)       or _first(RE_PROVINCE, orig)
+    incident_place = _first(RE_INCIDENT_PLACE, t) or _first(RE_INCIDENT_PLACE, orig)
+    beat           = _first(RE_BEAT, t)           or _first(RE_BEAT, orig)
+
+    dist_m      = RE_DISTANCE_FROM_PS.search(t) or RE_DISTANCE_FROM_PS.search(orig)
     distance_from_ps = None
     if dist_m:
-        value, unit, direction = dist_m.group(1), dist_m.group(2), (dist_m.group(3) or "").strip()
-        distance_from_ps = f"{value} {unit}" + (f" {direction}" if direction else "")
+        val  = dist_m.group(1)
+        unit = dist_m.group(2)
+        dirn = dist_m.group(3) or ""
+        distance_from_ps = f"{val} {unit} {dirn}".strip()
 
     xai.extend([
-        _evidence("policeStation",    police_station,   "regex:RE_POLICE_STATION", _snippet(t, police_station or "")),
-        _evidence("district",         district,         "regex:RE_DISTRICT",       _snippet(t, district or "")),
-        _evidence("tehsil",           tehsil,           "regex:RE_TEHSIL",         _snippet(t, tehsil or "")),
-        _evidence("province",         province,         "regex:RE_PROVINCE",       _snippet(t, province or "")),
-        _evidence("incidentAddress",  incident_place,   "regex:RE_INCIDENT_PLACE", _snippet(t, incident_place or "")),
-        _evidence("beat",             beat,             "regex:RE_BEAT",           _snippet(t, beat or "")),
-        _evidence("distanceFromPS",   distance_from_ps, "regex:RE_DISTANCE_FROM_PS", ""),
+        _evidence("policeStation", police_station, "regex:RE_POLICE_STATION", _snippet(t, police_station or "")),
+        _evidence("district",      district,       "regex:RE_DISTRICT",       _snippet(t, district or "")),
+        _evidence("tehsil",        tehsil,         "regex:RE_TEHSIL",         _snippet(t, tehsil or "")),
+        _evidence("province",      province,       "regex:RE_PROVINCE",       _snippet(t, province or "")),
+        _evidence("incidentPlace", incident_place, "regex:RE_INCIDENT_PLACE", _snippet(t, incident_place or "")),
+        _evidence("beat",          beat,           "regex:RE_BEAT",           _snippet(t, beat or "")),
+        _evidence("distanceFromPS",distance_from_ps,"regex:RE_DISTANCE_FROM_PS",""),
     ])
 
-    # ── Complainant identity block (column 2 of form 24.5(1)) ───────────────
-    complainant_cnic      = _first(RE_CNIC, t)
-    complainant_phone     = _first(RE_PHONE, t) or _first(RE_PHONE_BARE, t)
-    complainant_age       = _first(RE_AGE, t)
-    complainant_father    = _first(RE_FATHER, t)
-    complainant_caste     = _first(RE_CASTE, t)
+    # ── Complainant ───────────────────────────────────────────────────────────
+    complainant_cnic       = _first(RE_CNIC,  t) or _first(RE_CNIC,  orig)
+    complainant_phone      = _first(RE_PHONE, t) or _first(RE_PHONE_BARE, t) or \
+                             _first(RE_PHONE, orig) or _first(RE_PHONE_BARE, orig)
+    complainant_age        = _first(RE_AGE,        t)
+    complainant_father     = _first(RE_FATHER,     t) or _first(RE_FATHER, orig)
+    complainant_caste      = _first(RE_CASTE,      t)
     complainant_profession = _first(RE_PROFESSION, t)
-    complainant_address   = _first(RE_RESIDENCE, t)
+    complainant_address    = _first(RE_RESIDENCE,  t) or _first(RE_RESIDENCE, orig)
+    label_complainant      = _first(RE_COMPLAINANT_LABEL, t) or _first(RE_COMPLAINANT_LABEL, orig)
 
-    label_complainant = _first(RE_COMPLAINANT_LABEL, t)
+    # ── Accused / Victims / Witnesses ────────────────────────────────────────
+    label_accused  = _all(RE_ACCUSED_LABEL,  t) + _all(RE_ACCUSED_LABEL,  orig)
+    accused_unknown = bool(RE_ACCUSED_UNKNOWN.search(t) or RE_ACCUSED_UNKNOWN.search(orig))
+    label_victims  = _all(RE_VICTIM_LABEL,   t) + _all(RE_VICTIM_LABEL,  orig)
+    label_witnesses= _all(RE_WITNESS_LABEL,  t) + _all(RE_WITNESS_LABEL, orig)
 
-    # ── Persons by explicit role label ──────────────────────────────────────
-    label_accused   = _all(RE_ACCUSED_LABEL, t)
-    accused_unknown = bool(RE_ACCUSED_UNKNOWN.search(t))
-    label_victims   = _all(RE_VICTIM_LABEL, t)
-    label_witnesses = _all(RE_WITNESS_LABEL, t)
+    # Deduplicate label lists
+    for lst_name in ("label_accused", "label_victims", "label_witnesses"):
+        lst = locals()[lst_name]
+        seen: set = set()
+        deduped = []
+        for item in lst:
+            if item.lower() not in seen:
+                deduped.append(item)
+                seen.add(item.lower())
+        # Re-assign via a dict trick since we can't assign to locals()
+        if lst_name == "label_accused":
+            label_accused = deduped
+        elif lst_name == "label_victims":
+            label_victims = deduped
+        else:
+            label_witnesses = deduped
 
-    # ── NER backends fill in names that lack explicit labels ────────────────
-    spacy_ents = _spacy_persons_locations(t)
-    urdu_ents  = _urdu_ner_persons_locations(orig) if orig else \
-                 {"PERSON": [], "GPE": [], "LOC": [], "ORG": []}
-
-    all_labelled_persons = set()
-    for v in [label_complainant] + label_accused + label_victims + label_witnesses:
-        if v:
-            for token in v.split():
-                if len(token) > 2:
-                    all_labelled_persons.add(token.lower())
-
-    extra_persons = []
-    for p in spacy_ents["PERSON"] + urdu_ents["PERSON"]:
-        if p and not any(t.lower() in all_labelled_persons for t in p.split() if len(t) > 2):
-            if p not in extra_persons:
-                extra_persons.append(p)
+    # ── spaCy NER ─────────────────────────────────────────────────────────────
+    spacy_ents = _spacy_ents(t)
+    extra_persons = [
+        p for p in spacy_ents["PERSON"]
+        if p.lower() not in (label_complainant or "").lower()
+        and p not in label_accused
+    ]
+    extra_persons_dedup: list = []
+    seen_p: set = set()
+    for p in extra_persons:
+        if p.lower() not in seen_p:
+            extra_persons_dedup.append(p)
+            seen_p.add(p.lower())
+    extra_persons = extra_persons_dedup
 
     extra_locations = list(dict.fromkeys(
-        spacy_ents["GPE"] + spacy_ents["LOC"] + urdu_ents["GPE"] + urdu_ents["LOC"]
+        spacy_ents["GPE"] + spacy_ents["LOC"]
     ))
 
-    # Resolve complainant: prefer explicit label, fall back to first NER person
     complainant_name = label_complainant or (extra_persons[0] if extra_persons else None)
 
-    # ── Legal: sections, act, "read with" linkages ──────────────────────────
-    sections = _all(RE_SECTION, t)
-    # If form had sections as a numbered list (e.g., column 3 in form 24.5(1)),
-    # try the list-item pattern too
+    # ── Legal ─────────────────────────────────────────────────────────────────
+    sections = _all(RE_SECTION, t) + _all(RE_SECTION, orig)
     if len(sections) < 2:
-        list_sections = _all(RE_SECTION_LIST_ITEM, t)
-        # Only keep 2-3 digit numbers that look like section numbers (filter out years, CNIC fragments)
-        list_sections = [s for s in list_sections if 1 <= int(s) <= 999]
+        list_sections = [s for s in _all(RE_SECTION_LIST_ITEM, t) if 1 <= int(s) <= 999]
         for s in list_sections:
             if s not in sections:
                 sections.append(s)
 
-    # Split combined sections like "324/148/149" into individual numbers
     expanded = []
     for s in sections:
-        parts = re.split(r"[\s,/]+", s)
-        for p in parts:
+        for p in re.split(r"[\s,/]+", s):
             if p.strip() and p.strip() not in expanded:
                 expanded.append(p.strip())
     sections = expanded
 
-    act = _first(RE_ACT, t)
-    rw_match = RE_SECTION_RW.search(t)
+    act        = _first(RE_ACT, t) or _first(RE_ACT, orig)
+    rw_match   = RE_SECTION_RW.search(t) or RE_SECTION_RW.search(orig)
     section_rw = f"{rw_match.group(1)} r/w {rw_match.group(2)}" if rw_match else None
+    offences   = list(dict.fromkeys(m.lower() for m in _all(RE_OFFENCE, t)))
+    if not offences:
+        offences = list(dict.fromkeys(m.lower() for m in _all(RE_OFFENCE, orig)))
 
-    offences = list(dict.fromkeys(m.lower() for m in _all(RE_OFFENCE, t)))
-
-    # ── Physical evidence ───────────────────────────────────────────────────
+    # ── Physical evidence ─────────────────────────────────────────────────────
     weapons  = list(dict.fromkeys(m.lower() for m in _all(RE_WEAPON, t)))
-    vehicles = list(dict.fromkeys(m.lower() for m in _all(RE_VEHICLE, t)))
-    plates   = _all(RE_PLATE, t)
+    vehicles = list(dict.fromkeys(
+        m.lower() for m in (_all(RE_VEHICLE, t) + _all(RE_VEHICLE, orig))
+    ))
+    plates   = list(dict.fromkeys(_all(RE_PLATE, t) + _all(RE_PLATE, orig)))
 
-    # ── Investigating Officer ───────────────────────────────────────────────
-    io_name = _first(RE_IO_NAME, t)
-    io_rank_match = RE_IO_RANK.search(t)
-    io_rank = io_rank_match.group(1) if io_rank_match else None
+    # ── Investigating Officer ─────────────────────────────────────────────────
+    io_name       = _first(RE_IO_NAME, t) or _first(RE_IO_NAME, orig)
+    io_rank_match = RE_IO_RANK.search(t) or RE_IO_RANK.search(orig)
+    io_rank       = io_rank_match.group(1) if io_rank_match else None
     if not io_name and io_rank_match and io_rank_match.group(2):
         io_name = io_rank_match.group(2).strip()
-    belt_number = _first(RE_BELT_NUMBER, t)
+    belt_number = _first(RE_BELT_NUMBER, t) or _first(RE_BELT_NUMBER, orig)
 
-    # ── Hospital reference (injury / death cases) ───────────────────────────
-    hospital_match = RE_HOSPITAL.search(t)
-    hospital_ref = None
+    # ── Hospital ──────────────────────────────────────────────────────────────
+    hospital_match = RE_HOSPITAL.search(t) or RE_HOSPITAL.search(orig)
+    hospital_ref   = None
     if hospital_match:
-        hosp_type = hospital_match.group(1)
-        hosp_no = hospital_match.group(2)
+        hosp_type    = hospital_match.group(1)
+        hosp_no      = hospital_match.group(2)
         hospital_ref = f"{hosp_type} {hosp_no}".strip() if hosp_no else hosp_type
 
     xai.extend([
-        _evidence("complainantName",     complainant_name,       "regex+ner",                  _snippet(t, complainant_name or "")),
-        _evidence("complainantFather",   complainant_father,     "regex:RE_FATHER",            _snippet(t, complainant_father or "")),
-        _evidence("complainantCNIC",     complainant_cnic,       "regex:RE_CNIC",              _snippet(t, complainant_cnic or "")),
-        _evidence("complainantPhone",    complainant_phone,      "regex:RE_PHONE",             _snippet(t, complainant_phone or "")),
-        _evidence("complainantAge",      complainant_age,        "regex:RE_AGE",               _snippet(t, complainant_age or "")),
-        _evidence("complainantCaste",    complainant_caste,      "regex:RE_CASTE",             _snippet(t, complainant_caste or "")),
-        _evidence("complainantProfession", complainant_profession, "regex:RE_PROFESSION",      _snippet(t, complainant_profession or "")),
-        _evidence("complainantAddress",  complainant_address,    "regex:RE_RESIDENCE",         _snippet(t, complainant_address or "")),
-        _evidence("accusedPersons",      label_accused,          "regex:RE_ACCUSED_LABEL",     ""),
-        _evidence("accusedUnknown",      accused_unknown,        "regex:RE_ACCUSED_UNKNOWN",   ""),
-        _evidence("victims",             label_victims,          "regex:RE_VICTIM_LABEL",      ""),
-        _evidence("witnesses",           label_witnesses,        "regex:RE_WITNESS_LABEL",     ""),
-        _evidence("legalSections",       sections,               "regex:RE_SECTION + list",    ""),
-        _evidence("applicableAct",       act,                    "regex:RE_ACT",               _snippet(t, act or "")),
-        _evidence("sectionReadWith",     section_rw,             "regex:RE_SECTION_RW",        ""),
-        _evidence("offences",            offences,               "regex:RE_OFFENCE",           ""),
-        _evidence("weaponsInvolved",     weapons,                "regex:RE_WEAPON",            ""),
-        _evidence("vehiclesInvolved",    vehicles,               "regex:RE_VEHICLE",           ""),
-        _evidence("vehiclePlates",       plates,                 "regex:RE_PLATE",             ""),
-        _evidence("ioName",              io_name,                "regex:RE_IO_NAME",           _snippet(t, io_name or "")),
-        _evidence("ioRank",              io_rank,                "regex:RE_IO_RANK",           _snippet(t, io_rank or "")),
-        _evidence("beltNumber",          belt_number,            "regex:RE_BELT_NUMBER",       _snippet(t, belt_number or "")),
-        _evidence("hospitalReference",   hospital_ref,           "regex:RE_HOSPITAL",          _snippet(t, hospital_ref or "")),
-        {"field": "ner_persons",   "extracted_value": extra_persons,   "extraction_method": "spacy + urdu_ner", "snippet": "", "confidence": "medium" if extra_persons else "none"},
-        {"field": "ner_locations", "extracted_value": extra_locations, "extraction_method": "spacy + urdu_ner", "snippet": "", "confidence": "medium" if extra_locations else "none"},
+        _evidence("complainantName",       complainant_name,       "regex+spacy",            _snippet(t, complainant_name or "")),
+        _evidence("complainantFather",     complainant_father,     "regex:RE_FATHER",         _snippet(t, complainant_father or "")),
+        _evidence("complainantCNIC",       complainant_cnic,       "regex:RE_CNIC",           _snippet(t, complainant_cnic or "")),
+        _evidence("complainantPhone",      complainant_phone,      "regex:RE_PHONE",          _snippet(t, complainant_phone or "")),
+        _evidence("complainantAge",        complainant_age,        "regex:RE_AGE",            _snippet(t, complainant_age or "")),
+        _evidence("complainantCaste",      complainant_caste,      "regex:RE_CASTE",          _snippet(t, complainant_caste or "")),
+        _evidence("complainantProfession", complainant_profession, "regex:RE_PROFESSION",     _snippet(t, complainant_profession or "")),
+        _evidence("complainantAddress",    complainant_address,    "regex:RE_RESIDENCE",      _snippet(t, complainant_address or "")),
+        _evidence("accusedPersons",        label_accused,          "regex:RE_ACCUSED_LABEL",  ""),
+        _evidence("accusedUnknown",        accused_unknown,        "regex:RE_ACCUSED_UNKNOWN",""),
+        _evidence("victims",               label_victims,          "regex:RE_VICTIM_LABEL",   ""),
+        _evidence("witnesses",             label_witnesses,        "regex:RE_WITNESS_LABEL",  ""),
+        _evidence("legalSections",         sections,               "regex:RE_SECTION+list",   ""),
+        _evidence("applicableAct",         act,                    "regex:RE_ACT",            _snippet(t, act or "")),
+        _evidence("sectionReadWith",       section_rw,             "regex:RE_SECTION_RW",     ""),
+        _evidence("offences",              offences,               "regex:RE_OFFENCE",        ""),
+        _evidence("weaponsInvolved",       weapons,                "regex:RE_WEAPON",         ""),
+        _evidence("vehiclesInvolved",      vehicles,               "regex:RE_VEHICLE",        ""),
+        _evidence("vehiclePlates",         plates,                 "regex:RE_PLATE",          ""),
+        _evidence("ioName",                io_name,                "regex:RE_IO_NAME",        _snippet(t, io_name or "")),
+        _evidence("ioRank",                io_rank,                "regex:RE_IO_RANK",        _snippet(t, io_rank or "")),
+        _evidence("beltNumber",            belt_number,            "regex:RE_BELT_NUMBER",    _snippet(t, belt_number or "")),
+        _evidence("hospitalReference",     hospital_ref,           "regex:RE_HOSPITAL",       _snippet(t, hospital_ref or "")),
+        {"field": "ner_persons",   "extracted_value": extra_persons,   "extraction_method": "spacy", "snippet": "", "confidence": "medium" if extra_persons else "none"},
+        {"field": "ner_locations", "extracted_value": extra_locations, "extraction_method": "spacy", "snippet": "", "confidence": "medium" if extra_locations else "none"},
     ])
 
-    # ── Completeness scoring (Pakistani-FIR critical fields) ────────────────
+    # ── Completeness scoring ──────────────────────────────────────────────────
     filled = {
         "firNumber":       bool(fir_no),
         "complainantName": bool(complainant_name),
@@ -684,73 +636,57 @@ def extract_entities(text: str, original_text: Optional[str] = None) -> Dict[str
     completeness = round(sum(filled.values()) / len(filled) * 100, 1)
     missing_core = [k for k, v in filled.items() if not v]
 
-    # ── Pack fields for payload_generator ───────────────────────────────────
     fields = {
-        # Identifiers
-        "firNumber":          fir_no,
-        "caseTitle":          _build_case_title(offences, label_accused, incident_place),
-        "caseNumber":         fir_no,
-
-        # Dates
-        "dateOfReport":       date_of_report,
-        "dateOfIncident":     date_of_incident,
-        "timeOfIncident":     time_of_incident,
-
-        # Location hierarchy
-        "policeStation":      police_station,
-        "tehsil":             tehsil,
-        "district":           district,
-        "province":           province,
-        "incidentAddress":    incident_place,
-        "beat":               beat,
-        "distanceFromPS":     distance_from_ps,
-
-        # Complainant (full Pakistani identity block)
-        "complainantName":      complainant_name,
-        "complainantFather":    complainant_father,
-        "complainantCNIC":      complainant_cnic,
-        "complainantAge":       complainant_age,
-        "complainantPhone":     complainant_phone,
-        "complainantCaste":     complainant_caste,
+        "firNumber":             fir_no,
+        "caseTitle":             _build_case_title(offences, label_accused, incident_place),
+        "caseNumber":            fir_no,
+        "dateOfReport":          date_of_report,
+        "dateOfIncident":        date_of_incident,
+        "timeOfIncident":        time_of_incident,
+        "policeStation":         police_station,
+        "tehsil":                tehsil,
+        "district":              district,
+        "province":              province,
+        "incidentAddress":       incident_place,
+        "beat":                  beat,
+        "distanceFromPS":        distance_from_ps,
+        "complainantName":       complainant_name,
+        "complainantFather":     complainant_father,
+        "complainantCNIC":       complainant_cnic,
+        "complainantAge":        complainant_age,
+        "complainantPhone":      complainant_phone,
+        "complainantCaste":      complainant_caste,
         "complainantProfession": complainant_profession,
-        "complainantAddress":   complainant_address,
-
-        # Other persons
-        "accusedPersons":     label_accused if label_accused else ([] if not accused_unknown else ["نامعلوم / Unknown"]),
-        "accusedUnknown":     accused_unknown,
-        "victims":            label_victims,
-        "witnesses":          label_witnesses,
-
-        # Legal
-        "offenceType":        offences[0] if offences else None,
-        "allOffences":        offences,
-        "legalSections":      sections,
-        "applicableAct":      act,
-        "sectionReadWith":    section_rw,
-
-        # Evidence
-        "weaponsInvolved":    weapons,
-        "vehiclesInvolved":   vehicles,
-        "vehiclePlates":      plates,
-        "hospitalReference":  hospital_ref,
-
-        # Police / IO
-        "investigatingOfficer": io_name,
-        "ioRank":               io_rank,
-        "beltNumber":           belt_number,
+        "complainantAddress":    complainant_address,
+        "accusedPersons":        label_accused if label_accused else ([] if not accused_unknown else ["نامعلوم / Unknown"]),
+        "accusedUnknown":        accused_unknown,
+        "victims":               label_victims,
+        "witnesses":             label_witnesses,
+        "offenceType":           offences[0] if offences else None,
+        "allOffences":           offences,
+        "legalSections":         sections,
+        "applicableAct":         act,
+        "sectionReadWith":       section_rw,
+        "weaponsInvolved":       weapons,
+        "vehiclesInvolved":      vehicles,
+        "vehiclePlates":         plates,
+        "hospitalReference":     hospital_ref,
+        "investigatingOfficer":  io_name,
+        "ioRank":                io_rank,
+        "beltNumber":            belt_number,
     }
 
     return {
-        "fields":               fields,
-        "completeness_score":   completeness,
-        "missing_core_fields":  missing_core,
+        "fields":             fields,
+        "completeness_score": completeness,
+        "missing_core_fields": missing_core,
         "xai_breakdown": {
-            "entities_found": {k: (len(v) if isinstance(v, list) else int(bool(v))) for k, v in fields.items()},
-            "evidence":       xai,
-            "ner_backends": {
-                "spacy_ready":    models.spacy_nlp is not None,
-                "urdu_ner_ready": models.urdu_ner_pipeline is not None,
+            "entities_found": {
+                k: (len(v) if isinstance(v, list) else int(bool(v)))
+                for k, v in fields.items()
             },
+            "evidence":    xai,
+            "ner_backend": "spacy",
         },
         "extractedEntities": {
             "persons":   list(filter(None,
@@ -773,7 +709,7 @@ def _empty_result() -> Dict[str, Any]:
         "fields":              {},
         "completeness_score":  0.0,
         "missing_core_fields": list(_CRITICAL_FIELD_KEYS),
-        "xai_breakdown":       {"entities_found": {}, "evidence": [], "ner_backends": {}},
+        "xai_breakdown":       {"entities_found": {}, "evidence": [], "ner_backend": "spacy"},
         "extractedEntities":   {"persons": [], "locations": [], "weapons": [], "vehicles": [], "dates": []},
         "missingFields":       list(_CRITICAL_FIELD_KEYS),
     }

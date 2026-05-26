@@ -1,6 +1,9 @@
 # services/case_linker_engine.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Case Linker Engine — v3 (investigator-grade explanations)
+# Case Linker Engine — v6 (investigator-grade explanations + SBERT semantic dim)
+#
+# v6 = v3 (deterministic 8-dim feature engine) + SBERT 9th dim (in-process).
+# Single self-contained file — no patches to apply.
 #
 # WHAT'S NEW vs v2
 # ────────────────
@@ -71,8 +74,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import networkx as nx
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from services import semantic_similarity as semsim
- 
+
 from models import (
     Case,
     CaseSuspect,
@@ -81,39 +83,50 @@ from models import (
     Person,
 )
 
+# SBERT semantic similarity service (in-process; merged from v4 PATCH).
+# When the embedder isn't loaded, all calls return None/0.0 and the
+# narrative_semantic dimension simply doesn't fire — every other
+# dimension still works.
+from services import semantic_similarity as semsim
+
 log = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════════════════════
 # Tunables
 # ════════════════════════════════════════════════════════════════════════════
 WEIGHTS: Dict[str, float] = {
-    "shared_suspect":     0.28,   # was 0.30
-    "shared_victim":      0.14,   # was 0.15
-    "narrative_semantic": 0.10,   # NEW
-    "same_weapon":        0.11,   # was 0.12
-    "same_mo":            0.11,   # was 0.12
-    "same_location":      0.11,   # was 0.12
-    "same_crime_type":    0.07,   # was 0.08
-    "evidence_overlap":   0.05,   # was 0.06
-    "temporal_close":     0.03,   # was 0.05
+    # v6: rebalanced to make room for narrative_semantic. The relative
+    # ranking of dimensions is unchanged — shared_suspect still
+    # dominates — and the sum stays ≈1.0 so MIN_PERSIST_SCORE and
+    # HIGH_CONFIDENCE_THRESHOLD don't need re-tuning.
+    "shared_suspect":     0.28,
+    "shared_victim":      0.14,
+    "narrative_semantic": 0.10,  # NEW in v6 — SBERT cosine on case narrative
+    "same_weapon":        0.11,
+    "same_mo":            0.11,
+    "same_location":      0.11,
+    "same_crime_type":    0.07,
+    "evidence_overlap":   0.05,
+    "temporal_close":     0.03,
 }
 
 LINK_TYPE_CODES = {
-    "shared_suspect":  "SUSPECT_MATCH",
-    "shared_victim":   "VICTIM_MATCH",
-    "same_weapon":     "WEAPON_MATCH",
-    "same_location":   "LOCATION_MATCH",
-    "same_mo":         "MODUS_MATCH",
-    "same_crime_type": "CRIME_TYPE_MATCH",
-    "evidence_overlap":"EVIDENCE_MATCH",
-    "temporal_close":  "TEMPORAL",
-    "narrative_semantic": "NARRATIVE_MATCH",
+    "shared_suspect":     "SUSPECT_MATCH",
+    "shared_victim":      "VICTIM_MATCH",
+    "narrative_semantic": "NARRATIVE_MATCH",  # NEW in v6
+    "same_weapon":        "WEAPON_MATCH",
+    "same_location":      "LOCATION_MATCH",
+    "same_mo":            "MODUS_MATCH",
+    "same_crime_type":    "CRIME_TYPE_MATCH",
+    "evidence_overlap":   "EVIDENCE_MATCH",
+    "temporal_close":     "TEMPORAL",
 }
 
 # Used by case_linker_hook for the notification body.
 LINK_TYPE_HUMAN = {
     "SUSPECT_MATCH":    "shared suspect",
     "VICTIM_MATCH":     "shared victim",
+    "NARRATIVE_MATCH":  "matching narrative pattern",  # NEW in v6
     "WEAPON_MATCH":     "matching weapon",
     "LOCATION_MATCH":   "shared location",
     "MODUS_MATCH":      "matching modus operandi",
@@ -121,11 +134,16 @@ LINK_TYPE_HUMAN = {
     "EVIDENCE_MATCH":   "overlapping evidence",
     "TEMPORAL":         "temporal proximity",
     "OTHER":            "multiple shared signals",
-    "NARRATIVE_MATCH": "matching narrative pattern",
 }
 
 MIN_PERSIST_SCORE = 0.30
 HIGH_CONFIDENCE_THRESHOLD = 0.75
+
+# SBERT cosine thresholds for the narrative_semantic dimension.
+# Tuned for paraphrase-multilingual-MiniLM-L12-v2 on short FIR narratives.
+# Below SEM_FLOOR is noise; above SEM_STRONG is treated as full signal.
+SEM_FLOOR  = 0.55
+SEM_STRONG = 0.85
 
 TEMPORAL_FULL_DAYS = 30
 TEMPORAL_DECAY_DAYS = 180
@@ -133,9 +151,6 @@ TIME_OF_DAY_WINDOW_HOURS = 2  # incidents within 2 hours of each other count
 
 SPATIAL_SAME_STATION_BONUS = 0.4
 SPATIAL_GPS_THRESHOLD_KM = 2.0
-
-SEM_FLOOR = 0.55        
-SEM_STRONG = 0.85  
 
 # Weapon category families — used when exact label differs but both fall
 # in the same family. Extend as new weapon labels are seeded.
@@ -169,7 +184,6 @@ _STOPWORDS = {
     "this", "that", "these", "those", "it", "its", "they", "their", "them",
     "he", "she", "his", "her", "i", "we", "you", "but", "if", "not", "no",
 }
-
 
 def _norm(s: Optional[str]) -> Optional[str]:
     if s is None:
@@ -410,6 +424,7 @@ def _build_features(db: Session, case: Case) -> CaseFeatures:
     return f
 
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # Pairwise scoring — each dimension returns (score, headline_phrase, detail_lines)
 # ════════════════════════════════════════════════════════════════════════════
@@ -422,64 +437,6 @@ class DimensionResult:
     headline_phrase: Optional[str] = None
     detail_section: Optional[Tuple[str, List[str]]] = None  # (heading, bullets)
     shared_entities: List[Tuple[str, str, Optional[int]]] = field(default_factory=list)
-
-
-def _dim_narrative_semantic(
-    db: Session,
-    a: "CaseFeatures", b: "CaseFeatures",
-    case_a: Case, case_b: Case,
-) -> "DimensionResult":
-    """SBERT semantic similarity over the case narratives.
- 
-    Catches links that the token-based MO dim misses — e.g.:
-      A: "suspect approached from behind and demanded the bag"
-      B: "perpetrator came up behind complainant and snatched purse"
-    Jaccard ≈ 0.05 (different words); cosine ≈ 0.82 (same meaning).
- 
-    The score is a linear ramp from SEM_FLOOR → SEM_STRONG. Below FLOOR
-    we treat as no signal; above STRONG we cap at 1.0. This matches how
-    investigators actually think about similarity: under ~0.5 cosine on
-    this model is just random short-text alignment, not real semantic
-    overlap.
-    """
-    cosine = semsim.semantic_score(db, case_a, case_b)
-    if cosine < SEM_FLOOR:
-        return DimensionResult()
- 
-    # Linear ramp
-    if cosine >= SEM_STRONG:
-        score = 1.0
-    else:
-        score = (cosine - SEM_FLOOR) / (SEM_STRONG - SEM_FLOOR)
- 
-    pct = int(round(cosine * 100))
- 
-    # Headline phrase — kept compact for table cell.
-    if cosine >= 0.85:
-        headline = f"strong narrative match (semantic similarity {pct}%)"
-    elif cosine >= 0.70:
-        headline = f"similar narrative patterns ({pct}% semantic match)"
-    else:
-        headline = f"weak narrative overlap ({pct}% semantic match)"
- 
-    # Detail — explain what this signal IS, in plain language, plus the
-    # raw number so the investigator can see we didn't fabricate it.
-    # This is the "audit trail" SHAP would normally provide, just direct.
-    bullets = [
-        f"Case narratives have **{pct}% semantic similarity** "
-        f"(multilingual MiniLM cosine).",
-        "Semantic similarity catches matches based on **meaning** even when "
-        "the FIR wording differs — same crime described in different words.",
-    ]
- 
-    # Add a soft caveat when only semantic fires and no concrete entity
-    # overlap exists; this is the case most likely to be a false positive
-    # (two robberies described similarly but unrelated).
-    return DimensionResult(
-        score=score,
-        headline_phrase=headline,
-        detail_section=("NARRATIVE (SEMANTIC)", bullets),
-    )
 
 def _dim_suspects(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
     shared_keys = set(a.suspects.keys()) & set(b.suspects.keys())
@@ -848,6 +805,60 @@ def _dim_evidence(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# v6 NEW — Dimension 9: narrative semantic similarity (SBERT)
+# ════════════════════════════════════════════════════════════════════════════
+def _dim_narrative_semantic(
+    db: Session,
+    a: "CaseFeatures", b: "CaseFeatures",
+    case_a: Case, case_b: Case,
+) -> "DimensionResult":
+    """SBERT cosine on case narratives.
+
+    Catches links the token-based MO dim misses. Example:
+      A: "suspect approached the victim from behind and demanded the bag"
+      B: "perpetrator came up behind complainant and snatched purse"
+    Jaccard ≈ 0.05 (different words); cosine ≈ 0.82 (same meaning).
+
+    Score is a linear ramp SEM_FLOOR → SEM_STRONG. Below FLOOR we treat
+    as no signal (random short-text alignment noise). The headline phrase
+    shows the raw percentage so the investigator can audit the claim.
+
+    Returns an empty DimensionResult if the SBERT embedder isn't loaded
+    or either narrative is empty — the linker keeps working on the 8
+    deterministic dimensions in that case.
+    """
+    cosine = semsim.semantic_score(db, case_a, case_b)
+    if cosine < SEM_FLOOR:
+        return DimensionResult()
+
+    if cosine >= SEM_STRONG:
+        score = 1.0
+    else:
+        score = (cosine - SEM_FLOOR) / (SEM_STRONG - SEM_FLOOR)
+
+    pct = int(round(cosine * 100))
+    if cosine >= 0.85:
+        headline = f"strong narrative match (semantic similarity {pct}%)"
+    elif cosine >= 0.70:
+        headline = f"similar narrative patterns ({pct}% semantic match)"
+    else:
+        headline = f"weak narrative overlap ({pct}% semantic match)"
+
+    bullets = [
+        f"Case narratives have **{pct}% semantic similarity** "
+        f"(multilingual MiniLM cosine).",
+        "Semantic similarity catches matches based on **meaning** even when "
+        "the FIR wording differs — same crime described in different words.",
+    ]
+
+    return DimensionResult(
+        score=score,
+        headline_phrase=headline,
+        detail_section=("NARRATIVE (SEMANTIC)", bullets),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Pair scoring: bundle all dimensions
 # ════════════════════════════════════════════════════════════════════════════
 @dataclass
@@ -880,9 +891,16 @@ class EdgeScore:
 
 def _score_pair(
     db: Session,
-    a: "CaseFeatures", b: "CaseFeatures",
+    a: CaseFeatures, b: CaseFeatures,
     case_a: Case, case_b: Case,
-) -> "EdgeScore":
+) -> EdgeScore:
+    """Compute every dimension and bundle into one EdgeScore.
+
+    v6 signature change: now takes the Session + both Case ORM objects
+    so the narrative_semantic dimension can fetch/cache embeddings.
+    All 9 deterministic + semantic dimensions are evaluated; temporal
+    is conditional on at least one other dimension firing.
+    """
     raw: Dict[str, DimensionResult] = {
         "shared_suspect":     _dim_suspects(a, b),
         "shared_victim":      _dim_victims(a, b),
@@ -899,7 +917,8 @@ def _score_pair(
     any_other_fired = any(d.score > 0 for d in raw.values())
     if any_other_fired:
         raw["temporal_close"] = _dim_temporal(a, b)
- 
+
+    # Drop dimensions that didn't fire so the dict stays clean
     dims = {k: v for k, v in raw.items() if v.score > 0}
     return EdgeScore(dimensions=dims)
 
@@ -1003,7 +1022,6 @@ def _make_proposal(focal_internal_id: int, edge: EdgeScore,
         shared_entities=edge.shared_entities,
     )
 
-
 def compute_links_for_case(
     db: Session,
     *,
@@ -1088,11 +1106,20 @@ def compute_links_for_case(
         G.add_node(cf.case_id_internal)
 
     proposals: List[LinkProposal] = []
+
+    # v6: pre-warm the focal case's embedding once. This avoids one
+    # HTTP/encode round-trip per candidate when narrative_semantic
+    # fires. Side-effects only; return is ignored.
     semsim.get_embedding(db, focal)
- 
+
+    # cand_fs is built in the SAME ORDER as `candidates`, so we can zip
+    # them and pass both the feature bundle and the ORM Case object
+    # into the new _score_pair signature.
     for cand_case, cf in zip(candidates, cand_fs):
         edge = _score_pair(db, focal_f, cf, focal, cand_case)
         if edge.total >= MIN_PERSIST_SCORE:
+            G.add_edge(focal_f.case_id_internal, cf.case_id_internal,
+                       score=edge.total)
             p = _make_proposal(focal_f.case_id_internal, edge, focal_f, cf)
             if p:
                 proposals.append(p)
@@ -1123,9 +1150,15 @@ def compute_case_graph_metrics(db: Session) -> Dict[str, dict]:
     G = nx.Graph()
     for f in features:
         G.add_node(f.case_id_internal, external=f.case_id_external)
+    # v6: pre-warm embeddings so the O(N²) scoring loop below doesn't
+    # encode each case N times. Skipping if SBERT not loaded is safe —
+    # semantic_score falls through to 0 on missing vectors.
+    for c in cases:
+        semsim.get_embedding(db, c)
+
     for i in range(len(features)):
         for j in range(i + 1, len(features)):
-            e = _score_pair(features[i], features[j])
+            e = _score_pair(db, features[i], features[j], cases[i], cases[j])
             if e.total >= MIN_PERSIST_SCORE:
                 G.add_edge(features[i].case_id_internal,
                            features[j].case_id_internal,

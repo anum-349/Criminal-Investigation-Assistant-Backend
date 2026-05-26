@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Optional
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -16,6 +17,8 @@ from services.realtime.ws_manager import manager
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+load_dotenv()
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = "HS256"

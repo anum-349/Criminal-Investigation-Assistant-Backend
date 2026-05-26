@@ -3,8 +3,7 @@ from sqlalchemy import (
     Column, Integer, LargeBinary, String, Text, Boolean, Float, DateTime, Date,
     ForeignKey, JSON, UniqueConstraint, Index
 )
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
 

@@ -1,3 +1,17 @@
+"""
+routes/leads_ai_routes.py
+─────────────────────────────────────────────────────────────────────────────
+Phase 4b (v2): HTTP endpoints for the comprehensive AI lead generator.
+
+Same three endpoints as v1, with added telemetry fields in the response:
+  • context_depth_score  (0-15 — how rich is the case data?)
+  • gap_count            (how many derived inconsistencies were spotted)
+  • raw_lead_count       (how many leads the LLM emitted before validation)
+
+These help the FYP report's evaluation chapter and give the frontend
+something useful to display when "no leads" comes back ("we found 4
+gaps but the model couldn't write grounded leads for them").
+"""
 from __future__ import annotations
 
 import json
@@ -10,24 +24,24 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from dependencies.auth import get_current_user         
-from db import get_db                         
+from dependencies.auth import get_current_user
+from db import get_db
 from models import User
 
 from services import llm_client
-from services.lead_generator import (
-    generate_leads,
-    GenerationResult,
-)
+from services.lead_generator import generate_leads, GenerationResult
 from schemas.case_lead_schema import LeadRow
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Response models
+# ─────────────────────────────────────────────────────────────────────────────
+
 class AIHealthResponse(BaseModel):
-    """Returned by GET /leads/ai/health. The frontend uses this to
-    decide whether to show the "Generate with AI" button at all."""
     available: bool
     model: str
     model_pulled: bool
@@ -35,15 +49,21 @@ class AIHealthResponse(BaseModel):
 
 
 class GenerateLeadsResponse(BaseModel):
-    """Returned by POST /generate. Mirrors GenerationResult but in
-    Pydantic so FastAPI's OpenAPI doc renders properly."""
-    case_id:           str
-    accepted_leads:    List[LeadRow]
-    rejected_count:    int
-    rejected_issues:   List[List[str]]
-    reason:            Optional[str] = None
-    duration_ms:       int = 0
-    model:             str = ""
+    case_id:             str
+    accepted_leads:      List[LeadRow]
+    rejected_count:      int
+    rejected_issues:     List[List[str]]
+    reason:              Optional[str] = None
+    duration_ms:         int = 0
+    model:               str = ""
+    context_depth_score: int = 0
+    gap_count:           int = 0
+    raw_lead_count:      int = 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
     "/leads/ai/health",
@@ -51,19 +71,11 @@ class GenerateLeadsResponse(BaseModel):
     summary="Check whether the AI lead generator is ready",
 )
 def ai_health() -> AIHealthResponse:
-    """Lightweight probe. Confirms Ollama is reachable AND that the
-    configured model is pulled. Anything else (e.g. DB connectivity)
-    is handled by the platform's /health endpoint.
-
-    Returns 200 with the boolean rather than 503 so the frontend can
-    read the state without try/catching every request."""
     available = llm_client.is_available()
     pulled    = llm_client.model_is_pulled() if available else False
 
     if not available:
-        detail = (
-            "Ollama is not reachable. Start it with `ollama serve`."
-        )
+        detail = "Ollama is not reachable. Start it with `ollama serve`."
     elif not pulled:
         detail = (
             f"Ollama is up but model '{llm_client.OLLAMA_MODEL}' is not "
@@ -80,6 +92,10 @@ def ai_health() -> AIHealthResponse:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Blocking generation
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.post(
     "/{case_id}/leads/generate",
     response_model=GenerateLeadsResponse,
@@ -91,18 +107,16 @@ def generate_case_leads(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> GenerateLeadsResponse:
-    """Synchronous lead generation. Builds context, calls Llama,
-    validates, persists, returns. Worst-case ~13s on a CPU laptop
-    per § 8 of the design.
+    """Synchronous lead generation. Returns the full GenerationResult.
 
-    HTTP error mapping (§ 9):
-        400  case_id missing / malformed → handled by service layer
-        403  user doesn't own the case   → handled by _resolve_case
-        404  case not found              → handled by _resolve_case
-        502  LLM returned garbage        → from generate_leads
-        503  Ollama not reachable        → from generate_leads
-        504  Generation timeout          → from generate_leads
-        500  anything else               → caught by global handler
+    HTTP error mapping:
+        400  case_id malformed       → handled by service layer
+        403  user doesn't own case   → handled by _resolve_case
+        404  case not found          → handled by _resolve_case
+        502  LLM returned garbage    → from generate_leads
+        503  Ollama not reachable    → from generate_leads
+        504  Generation timeout      → from generate_leads
+        500  anything else           → global handler
     """
     log.info(
         "[lead-gen-route] POST /generate case_id=%s user=%s",
@@ -114,6 +128,10 @@ def generate_case_leads(
     return GenerateLeadsResponse(**asdict(result))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Streaming (NDJSON)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.post(
     "/{case_id}/leads/generate/stream",
     summary="Generate AI leads for a case (streaming, NDJSON)",
@@ -124,15 +142,17 @@ def generate_case_leads_stream(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """NDJSON-streaming variant of /generate. The actual LLM call is
-    still blocking inside the orchestrator (Ollama's HTTP shape doesn't
-    let us stream individual leads mid-generation cleanly — the whole
-    JSON object comes out at once), but we emit the wrapping events
-    progressively so the UI feels alive.
+    """NDJSON stream. One JSON object per line.
 
-    For an FYP demo, this is honest: the UI shows progress, the model
-    finishes the JSON, we validate + emit each lead as a separate line,
-    then close the stream."""
+    Stream shape:
+        {"event":"started", "case_id":"C-2053", "model":"…"}
+        {"event":"context", "depth_score":9, "gap_count":4}
+        {"event":"lead",    "lead":{…LeadRow}}
+        {"event":"lead",    "lead":{…LeadRow}}
+        {"event":"rejected","count":1, "issues":[[…]]}
+        {"event":"done",    "accepted":2, "rejected":1, "duration_ms":5430,
+                            "raw_lead_count":3, "gap_count":4, "reason":null}
+    """
 
     def _emit():
         yield json.dumps({
@@ -163,6 +183,13 @@ def generate_case_leads_stream(
             }) + "\n"
             return
 
+        # Telemetry once context is built
+        yield json.dumps({
+            "event":        "context",
+            "depth_score":  result.context_depth_score,
+            "gap_count":    result.gap_count,
+        }) + "\n"
+
         for lead in result.accepted_leads:
             yield json.dumps({
                 "event": "lead",
@@ -171,17 +198,19 @@ def generate_case_leads_stream(
 
         if result.rejected_count:
             yield json.dumps({
-                "event":    "rejected",
-                "count":    result.rejected_count,
-                "issues":   result.rejected_issues,
+                "event":  "rejected",
+                "count":  result.rejected_count,
+                "issues": result.rejected_issues,
             }) + "\n"
 
         yield json.dumps({
-            "event":       "done",
-            "accepted":    len(result.accepted_leads),
-            "rejected":    result.rejected_count,
-            "duration_ms": result.duration_ms,
-            "reason":      result.reason,
+            "event":           "done",
+            "accepted":        len(result.accepted_leads),
+            "rejected":        result.rejected_count,
+            "duration_ms":     result.duration_ms,
+            "raw_lead_count":  result.raw_lead_count,
+            "gap_count":       result.gap_count,
+            "reason":          result.reason,
         }) + "\n"
 
     return StreamingResponse(

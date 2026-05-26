@@ -19,13 +19,12 @@ cymem==2.0.13
 dnspython==2.8.0
 ecdsa==0.19.1
 email-validator==2.3.0
-en_core_web_sm @ file:///C:/Users/akraj/Desktop/Senior%20Design%20Project/Criminal_Investigation_Assistant_Backend/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+# en_core_web_sm @ file:///C:/Users/akraj/Desktop/Senior%20Design%20Project/Criminal_Investigation_Assistant_Backend/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
 Faker==40.18.0
 fastapi==0.129.0
 fastapi-cli==0.0.23
 fastapi-cloud-cli==0.13.0
 fastar==0.8.0
-fasttext-wheel==0.9.2
 filelock==3.29.0
 fsspec==2026.4.0
 greenlet==3.3.1
@@ -54,9 +53,6 @@ packaging==26.2
 pandas==2.2.3
 passlib==1.7.4
 patsy==1.0.2
-pdf2image==1.17.0
-pdfminer.six==20251230
-pdfplumber==0.11.9
 pillow==12.2.0
 playwright==1.59.0
 pluggy==1.6.0
@@ -72,8 +68,6 @@ pydantic-settings==2.13.1
 pydantic_core==2.41.5
 pyee==13.0.1
 Pygments==2.19.2
-pypdfium2==5.8.0
-pytesseract==0.3.13
 pytest==9.0.3
 python-bidi==0.6.10
 python-dateutil==2.9.0.post0
@@ -88,12 +82,10 @@ rich==14.3.3
 rich-toolkit==0.19.4
 rignore==0.7.6
 rsa==4.9.1
-sacremoses==0.1.1
 safetensors==0.7.0
 scikit-learn==1.5.2
 scipy==1.17.1
 sentence-transformers==3.2.1
-sentencepiece==0.2.0
 sentry-sdk==2.53.0
 shellingham==1.5.4
 six==1.17.0
@@ -127,3 +119,7 @@ weasel==0.4.3
 websockets==16.0
 Werkzeug==3.1.8
 wrapt==2.1.2
+easyocr==1.7.2
+pymupdf==1.23.8
+groq==0.11.0
+langdetect==1.0.9

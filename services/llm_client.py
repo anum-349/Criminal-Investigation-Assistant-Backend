@@ -1,50 +1,43 @@
 """
 services/llm_client.py
 ─────────────────────────────────────────────────────────────────────────────
-Thin wrapper around Ollama's /api/generate endpoint.
-
-Why this exists as a separate module:
-    The lead generator should not know HOW to talk to the model — only
-    WHAT to ask. This isolates the HTTP layer so we can:
-      • Swap Ollama for vLLM/llama.cpp/lmstudio without touching the
-        prompt + validation code.
-      • Mock the LLM cleanly in unit tests (just stub out `generate`).
-      • Centralise retry / timeout / error mapping in one place.
-
-Ollama runs locally on port 11434 by default. The /api/generate endpoint
-accepts `format: "json"` to force structured output — Llama's small
-quantised models often miss closing braces on long outputs without it,
-so we always pass it.
+Groq cloud inference backend. Same public interface as the Ollama version.
 
 Env vars:
-    OLLAMA_HOST       Base URL, default http://localhost:11434
-    OLLAMA_MODEL      Model tag, default llama3.1:8b-instruct-q4_K_M
-    OLLAMA_TIMEOUT    Generation timeout (seconds), default 60
-                      The design doc § 9 expects p99 ~13s on CPU, so 60s
-                      gives us a healthy margin before declaring the model
-                      stuck.
+    GROQ_API_KEY   Required. Get from https://console.groq.com
+    GROQ_MODEL     Default: llama-3.1-8b-instant
+    GROQ_TIMEOUT   Generation timeout seconds. Default: 60
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+from dotenv import load_dotenv
 import requests
 
 log = logging.getLogger(__name__)
 
+load_dotenv()
+
 # ── Configuration ──────────────────────────────────────────────────────────
 
-OLLAMA_HOST    = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "llama3.1:8b-instruct-q4_K_M")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_TIMEOUT = int(os.getenv("GROQ_TIMEOUT", "60"))
 
-# Connection-only timeout (separate from total). If Ollama isn't running
-# we want to fail fast — 3 seconds is plenty for a localhost connect.
-OLLAMA_CONNECT_TIMEOUT = int(os.getenv("OLLAMA_CONNECT_TIMEOUT", "3"))
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# Keep these aliases so nothing else in your codebase breaks
+OLLAMA_MODEL   = GROQ_MODEL
+OLLAMA_TIMEOUT = GROQ_TIMEOUT
+OLLAMA_HOST    = "https://api.groq.com"
+
+_CONNECT_TIMEOUT = 10
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -52,68 +45,47 @@ OLLAMA_CONNECT_TIMEOUT = int(os.getenv("OLLAMA_CONNECT_TIMEOUT", "3"))
 class LLMError(Exception):
     """Base class for everything that can go wrong with the LLM call."""
 
-
 class LLMUnavailable(LLMError):
-    """Ollama itself isn't reachable. Maps to HTTP 503 in the route layer."""
-
+    """Groq API isn't reachable. Maps to HTTP 503."""
 
 class LLMTimeout(LLMError):
-    """The model didn't return inside OLLAMA_TIMEOUT. Maps to HTTP 504."""
-
+    """Model didn't return in time. Maps to HTTP 504."""
 
 class LLMBadResponse(LLMError):
-    """The model returned something we can't parse. Maps to HTTP 502."""
+    """Model returned something unparseable. Maps to HTTP 502."""
 
 
 # ── Result container ──────────────────────────────────────────────────────
 
 @dataclass
 class LLMResponse:
-    """One full generation, post-stream-consumption."""
-    text: str            # raw concatenated response (may include ```json fences)
+    text: str
     model: str
-    duration_ms: int     # wall-clock time to generate
-    eval_count: int      # tokens generated (from Ollama's `eval_count`)
+    duration_ms: int
+    eval_count: int      # completion tokens
 
 
 # ── Health check ──────────────────────────────────────────────────────────
 
 def is_available() -> bool:
-    """Quick liveness probe — used by the lead generator route to return
-    503 BEFORE building the (somewhat expensive) context bundle.
-
-    We hit /api/tags rather than /api/version because tags also confirms
-    the model registry is reachable; version sometimes returns OK while
-    the underlying llama runtime is wedged.
-    """
+    """Liveness probe — checks Groq is reachable and key is set."""
+    if not GROQ_API_KEY:
+        log.warning("GROQ_API_KEY not set in .env")
+        return False
     try:
         r = requests.get(
-            f"{OLLAMA_HOST}/api/tags",
-            timeout=(OLLAMA_CONNECT_TIMEOUT, 5),
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            timeout=(_CONNECT_TIMEOUT, 10),
         )
         return r.status_code == 200
     except requests.RequestException:
         return False
 
 
-def model_is_pulled(model: str = OLLAMA_MODEL) -> bool:
-    """Verify the configured model is actually installed locally. Ollama
-    will auto-pull on first request, but for a FYP demo we'd rather know
-    up-front than have the user wait 5 minutes for a download."""
-    try:
-        r = requests.get(
-            f"{OLLAMA_HOST}/api/tags",
-            timeout=(OLLAMA_CONNECT_TIMEOUT, 5),
-        )
-        if r.status_code != 200:
-            return False
-        tags = r.json().get("models", [])
-        return any(
-            m.get("name", "").startswith(model.split(":")[0])
-            for m in tags
-        )
-    except (requests.RequestException, ValueError):
-        return False
+def model_is_pulled(model: str = GROQ_MODEL) -> bool:
+    """Always True for Groq — no local download needed."""
+    return True
 
 
 # ── Core generation ───────────────────────────────────────────────────────
@@ -122,154 +94,181 @@ def generate(
     system_prompt: str,
     user_prompt: str,
     *,
-    model: str = OLLAMA_MODEL,
+    model: str = GROQ_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 2048,
+    max_tokens: int = 512,
     json_mode: bool = True,
 ) -> LLMResponse:
-    """Synchronous one-shot generation. Returns the full response text.
+    """One-shot generation via Groq's OpenAI-compatible API."""
 
-    temperature defaults to 0.2 because lead generation needs to be
-    REPRODUCIBLE — same case data should produce the same leads more or
-    less. Set higher (~0.7) for brainstorming variants.
+    if not GROQ_API_KEY:
+        raise LLMUnavailable("GROQ_API_KEY is not set. Add it to your .env file.")
 
-    json_mode forces Ollama to constrain output to valid JSON, which is
-    critical because every downstream step assumes JSON. Disable only
-    for debugging.
-    """
-    payload = {
-        "model":  model,
-        "system": system_prompt,
-        "prompt": user_prompt,
-        "stream": False,
-        "options": {
-            "temperature":   temperature,
-            "num_predict":   max_tokens,
-            # Penalty values that produce coherent, non-repetitive output
-            # on Llama 3.1 8B per the model card recommendations.
-            "repeat_penalty": 1.1,
-            "top_p":          0.9,
-        },
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type":  "application/json",
     }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "temperature":  temperature,
+        "max_tokens":   max_tokens,
+        "top_p":        0.9,
+    }
+
+    # Groq supports native JSON mode — use it when requested
     if json_mode:
-        payload["format"] = "json"
+        payload["response_format"] = {"type": "json_object"}
+
+    start = time.perf_counter()
 
     try:
         r = requests.post(
-            f"{OLLAMA_HOST}/api/generate",
+            GROQ_API_URL,
+            headers=headers,
             json=payload,
-            timeout=(OLLAMA_CONNECT_TIMEOUT, OLLAMA_TIMEOUT),
+            timeout=(_CONNECT_TIMEOUT, GROQ_TIMEOUT),
         )
     except requests.ConnectionError as e:
-        log.error("Ollama unreachable at %s: %s", OLLAMA_HOST, e)
-        raise LLMUnavailable(f"Ollama not reachable at {OLLAMA_HOST}") from e
+        log.error("Groq API unreachable: %s", e)
+        raise LLMUnavailable(f"Groq API not reachable: {e}") from e
     except requests.Timeout as e:
-        log.error("Ollama generation timed out after %ss", OLLAMA_TIMEOUT)
-        raise LLMTimeout(f"Generation exceeded {OLLAMA_TIMEOUT}s") from e
+        log.error("Groq generation timed out after %ss", GROQ_TIMEOUT)
+        raise LLMTimeout(f"Groq generation exceeded {GROQ_TIMEOUT}s") from e
     except requests.RequestException as e:
-        log.exception("Ollama request failed")
-        raise LLMError(f"Ollama request failed: {e}") from e
+        log.exception("Groq request failed")
+        raise LLMError(f"Groq request failed: {e}") from e
 
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+    if r.status_code == 429:
+        raise LLMUnavailable("Groq rate limit hit. Wait a moment and retry.")
+    if r.status_code == 401:
+        raise LLMUnavailable("Groq API key invalid or expired.")
     if r.status_code != 200:
-        log.error("Ollama returned %s: %s", r.status_code, r.text[:500])
-        raise LLMBadResponse(f"Ollama HTTP {r.status_code}: {r.text[:200]}")
+        log.error("Groq returned %s: %s", r.status_code, r.text[:500])
+        raise LLMBadResponse(f"Groq HTTP {r.status_code}: {r.text[:200]}")
 
     try:
         body = r.json()
     except ValueError as e:
-        raise LLMBadResponse(f"Ollama returned non-JSON envelope: {r.text[:200]}") from e
+        raise LLMBadResponse(f"Groq returned non-JSON: {r.text[:200]}") from e
 
-    text = body.get("response", "")
-    if not text:
-        raise LLMBadResponse("Ollama returned an empty `response` field")
+    try:
+        text = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e:
+        raise LLMBadResponse(f"Unexpected Groq response shape: {str(body)[:200]}") from e
+
+    if not text or not text.strip():
+        raise LLMBadResponse("Groq returned empty content")
+
+    usage = body.get("usage", {})
+    log.info(
+        "Groq done in %dms — prompt=%d tokens, completion=%d tokens",
+        elapsed_ms,
+        usage.get("prompt_tokens", 0),
+        usage.get("completion_tokens", 0),
+    )
 
     return LLMResponse(
         text=text,
         model=body.get("model", model),
-        duration_ms=int(body.get("total_duration", 0) / 1_000_000),  # ns → ms
-        eval_count=int(body.get("eval_count", 0)),
+        duration_ms=elapsed_ms,
+        eval_count=usage.get("completion_tokens", 0),
     )
 
 
-# ── Streaming variant (for SSE/NDJSON endpoint) ────────────────────────────
+# ── Streaming variant ──────────────────────────────────────────────────────
 
 def generate_stream(
     system_prompt: str,
     user_prompt: str,
     *,
-    model: str = OLLAMA_MODEL,
+    model: str = GROQ_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 2048,
+    max_tokens: int = 512,
     json_mode: bool = True,
 ) -> Iterator[str]:
-    """Yield partial response chunks as they arrive from Ollama. Used by
-    the route handler to stream to the browser via NDJSON.
+    """Stream tokens from Groq via SSE."""
 
-    NOTE: even with json_mode=True, Ollama streams the JSON token-by-token
-    — so the consumer can't json.loads() until the whole thing is in. The
-    route handler buffers internally; we expose streaming here to keep
-    the connection open and give the UI a "loading…" tick.
-    """
-    payload = {
-        "model":  model,
-        "system": system_prompt,
-        "prompt": user_prompt,
-        "stream": True,
-        "options": {
-            "temperature":    temperature,
-            "num_predict":    max_tokens,
-            "repeat_penalty": 1.1,
-            "top_p":          0.9,
-        },
+    if not GROQ_API_KEY:
+        raise LLMUnavailable("GROQ_API_KEY is not set.")
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type":  "application/json",
     }
-    if json_mode:
-        payload["format"] = "json"
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens":  max_tokens,
+        "top_p":       0.9,
+        "stream":      True,
+    }
+
+    # Note: json_object response_format is not supported with streaming on Groq
+    # The system prompt already instructs JSON-only output
 
     try:
         with requests.post(
-            f"{OLLAMA_HOST}/api/generate",
+            GROQ_API_URL,
+            headers=headers,
             json=payload,
-            timeout=(OLLAMA_CONNECT_TIMEOUT, OLLAMA_TIMEOUT),
+            timeout=(_CONNECT_TIMEOUT, GROQ_TIMEOUT),
             stream=True,
         ) as r:
             if r.status_code != 200:
-                raise LLMBadResponse(f"Ollama HTTP {r.status_code}")
+                raise LLMBadResponse(f"Groq HTTP {r.status_code}: {r.text[:200]}")
 
-            for line in r.iter_lines(decode_unicode=True):
-                if not line:
+            for raw_line in r.iter_lines(decode_unicode=True):
+                if not raw_line or not raw_line.startswith("data:"):
                     continue
+                line = raw_line[5:].strip()   # strip "data: " prefix
+                if line == "[DONE]":
+                    break
                 try:
                     chunk = json.loads(line)
                 except ValueError:
-                    log.debug("Skipping non-JSON stream line: %r", line[:80])
                     continue
-                piece = chunk.get("response", "")
-                if piece:
-                    yield piece
-                if chunk.get("done"):
-                    break
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                token_text = delta.get("content", "")
+                if token_text:
+                    yield token_text
 
     except requests.ConnectionError as e:
-        raise LLMUnavailable(f"Ollama not reachable at {OLLAMA_HOST}") from e
+        raise LLMUnavailable(f"Groq not reachable: {e}") from e
     except requests.Timeout as e:
-        raise LLMTimeout(f"Stream exceeded {OLLAMA_TIMEOUT}s") from e
+        raise LLMTimeout(f"Groq stream exceeded {GROQ_TIMEOUT}s") from e
     except requests.RequestException as e:
-        raise LLMError(f"Stream failed: {e}") from e
+        raise LLMError(f"Groq stream failed: {e}") from e
 
 
-# ── Smoke test (run as module) ─────────────────────────────────────────────
+# ── Smoke test ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    if not is_available():
-        log.error("Ollama not running. Start with `ollama serve`.")
-        raise SystemExit(1)
-    if not model_is_pulled():
-        log.error("Model %s not pulled. Run `ollama pull %s`.", OLLAMA_MODEL, OLLAMA_MODEL)
+
+    if not GROQ_API_KEY:
+        log.error("GROQ_API_KEY not set. Add it to .env: GROQ_API_KEY=gsk_xxxx")
         raise SystemExit(1)
 
+    if not is_available():
+        log.error("Groq API not reachable. Check internet and API key.")
+        raise SystemExit(1)
+
+    log.info("Testing Groq model: %s", GROQ_MODEL)
     resp = generate(
         system_prompt="You output only valid JSON.",
         user_prompt='Return a JSON object with one key "ok" set to true.',
+        max_tokens=30,
     )
-    log.info("Smoke test response in %dms: %s", resp.duration_ms, resp.text)
+    log.info("Response in %dms (%d tokens): %s", resp.duration_ms, resp.eval_count, resp.text)

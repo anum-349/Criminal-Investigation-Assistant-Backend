@@ -1,0 +1,582 @@
+
+{
+  "success": true,
+  "error": null,
+  "duration_ms": 224949.3,
+  "payload": {
+    "firNumber": "41/2022",
+    "caseNumber": "41/2022",
+    "caseTitle": "Cyber Crime by unknown persons at from Police Station FAISALABAD",
+    "policeStation": "FIA CYBER CRIME WING",
+    "tehsil": null,
+    "district": "Faisalabad",
+    "province": null,
+    "beat": null,
+    "dateOfReport": "14/03/2022",
+    "dateOfIncident": "14/03/2022",
+    "timeOfIncident": "02:00",
+    "incidentAddress": "from Police Station FAISALABAD",
+    "distanceFromPS": null,
+    "offenceType": "cyber crime",
+    "allOffences": [
+      "cyber crime",
+      "unfair means",
+      "unauthorized access"
+    ],
+    "legalSections": [
+      "3",
+      "4",
+      "5",
+      "13",
+      "14",
+      "15",
+      "16",
+      "18",
+      "19",
+      "23",
+      "419",
+      "420",
+      "468",
+      "471"
+    ],
+    "applicableAct": "both",
+    "sectionReadWith": "U/S 3, 4, 5, 13, 14, 15, 16, 18, 19, 23 PECA 2016 R/W 419, 420, 468, 471 PPC",
+    "complainantName": "Maaz Waheed",
+    "complainantFather": null,
+    "complainantCNIC": null,
+    "complainantAge": null,
+    "complainantPhone": "021-35341012",
+    "complainantCaste": null,
+    "complainantProfession": "of Accountancy in Pakistan Furthermore",
+    "complainantAddress": "Institute of Chartered Accountant Pakistan (ICAP), Plot No. SC Nishat Lane No. 2, Khayaban e Nishat, Phase 6, Karachi",
+    "accusedPersons": [
+      "Qasir Iqbal S/O Muhammad Iqbal Anjum"
+    ],
+    "accusedUnknown": false,
+    "victims": [],
+    "witnesses": [],
+    "weaponsInvolved": [],
+    "vehiclesInvolved": [
+      "car"
+    ],
+    "vehiclePlates": [
+      "LEE-17-1316"
+    ],
+    "hospitalReference": null,
+    "investigatingOfficer": "Muhammad Asif Nazir",
+    "ioRank": "Assistant Director",
+    "beltNumber": null,
+    "crimeSummary": "The accused, Qasir Iqbal, allegedly accessed and transmitted information systems, data, and software of the Institute of Chartered Accountant Pakistan (ICAP) using electronic devices during an examination. The accused was found with a mobile phone containing chats related to providing unfair means during the examination.",
+    "statementEnglish": "Consequent upon Enquiry No 302022 Dated 05-01-2022 registered on the complaint of Maaz Waheed Advocate High Court Pakistan on behalf of Institute of Chartered Accountant Pakistan (ICAP), wherein in his complaint, against the unauthorized access/transmission of Information system, Data, software, and including use of electronic/digital devices during the examination of Institute of use of unfair means Chartered Accountant of Pakistan (ICAP) by the alleged person namely Qasir Iqbal So Muhammad Iqbal Anjum Ro House No P-203, Qaswa Home Colony, Faisalabad. The complainant is an Institute, and was with the prime objective of established in year 1961 under the Chartered Accountant ordinance 1961 regulating the profession of Accountancy in Pakistan. Furthermore, the complainant is responsible for due 10 In the year 2021, conducting Chartered Accountancy Examinations under the said ordinance Remote Proctor Exam and using COVID, the examination process was transferred from manual to Online and held remotly be can Examination the which Online Software Assessment Master invigilation were recorded to protect the use of Electronic digital devices and other illegal means as any Assessment Master Online or all electronic devices software other than Remote Proctor Exam and Software during examination were prohibited. So, the complainant requested to take strict legal action Action: During the 11^ against the alleged person namely Casir Iqbal S%o Muhammad Iqbal Anjum course of the enquiry, record was obtained from the concerned institute organization, revealed that the alleged person namely Qasir Iqbal is found involved in unauthorized access transmission of Information the examination Today, a source informed during system, Data and software to provide the unfair means that the alleged person namely Qasir Iqbal is present near Juice Corner, Mall Road, Lahore, if the raid is conducted, the alleged person will be arrested along with evidence. The said information is conveyed to Amir Aslam, IC who constituted the raiding team including Sl Incharge FIA, CCRC, Faisalabad, Shahram Iqbal under the supervision of undersigned The raiding team reached at the above said location, pointed towards the alleged person namely Qasir Iqbal, present in car SUZUKI SPACIA where Ilic sOurcC The having registration number LEE I7-I316 The alleged person is introduced with the raiding team On his personal search, one alleged person is identified as Oasir Iqbal S% Muhammad Iqbal Anjum 19 Pro IMEI-1; 86369605090900233, IMEI-2: 863696050900225 is recovered mobile phone OPPO F from him On spot analysis is made by the undersigned, depicts that the alleged chat regarding, providing unfair means during the ICAP examination is recovered from the alleged persons mobile using solution car and phone was detained by the raiding team, the recovered mobile The accused person phone possession as per seizure are taken into SUZUKI SPACIA having registration number LEE-17-1316 memo Prima Facic, the alleged person namely Qasir Iqbal (331OO4564224-7) S% Muhammad Iqbal 18, 19, 23 PECA 2016 R/W 419, 420, 468, 16, 13, 14, 15, Anjum has committed offences US 3, 4, 5 Qasir Iqbal S%o against 471 PPC, Istighasa is sent through FC Shahram Iqbal for registration of a case P-203, Qaswa Home Colony, Faisalabad, while the role of Muhammad Iqbal Anjum R o House No and registered others (if any) will be determined during the course of investigation Hence a case may be copy of FIR be sent to the undersigned I am busy in investigation on spot Procceding at Police Station: 13, 14, 15,16, 18, 19, 23 PECA 2016 RW On receipt of Istighasa, a case is hereby registered US 3, 4, 5 419, 420, 468, 471 PPC against Qasir Iqbal S% Muhammad Iqbal Anjum (3310O-4564224-7) Rlo House Asif Nazir to Muhammad is entrusted Investigation Home Colony Faisalabad P-203, Qaswa No. of FIR be sent to the investigation Copy Assistant Director, by the orders of the competent authority officer and concerned quarters.",
+    "incidentDate": "14/03/2022",
+    "reportingDate": "14/03/2022",
+    "incidentTime": "02:00",
+    "description": "The accused, Qasir Iqbal, allegedly accessed and transmitted information systems, data, and software of the Institute of Chartered Accountant Pakistan (ICAP) using electronic devices during an examination. The accused was found with a mobile phone containing chats related to providing unfair means during the examination.",
+    "ppcSections": "3, 4, 5, 13, 14, 15, 16, 18, 19, 23, 419, 420, 468, 471",
+    "address": "from Police Station FAISALABAD",
+    "city": "Faisalabad",
+    "completenessScore": 70.0,
+    "confidence": 70.0,
+    "extractedEntities": {
+      "persons": [
+        "and complaint"
+      ],
+      "locations": [
+        "from Police Station \nFAISALABAD",
+        "FIA CYBER CRIME WING"
+      ],
+      "weapons": [],
+      "vehicles": [
+        "car",
+        "suzuki",
+        "spacia"
+      ],
+      "dates": [
+        "14-03-2022",
+        "14-03-2022"
+      ]
+    },
+    "missingFields": [
+      "complainantCNIC",
+      "accused",
+      "district"
+    ],
+    "firLanguage": "English",
+    "firType": "FIR"
+  },
+  "steps": {
+    "ocr": {
+      "method": "pymupdf_direct",
+      "char_count": 5587,
+      "language": "english"
+    },
+    "regex": {
+      "fir_number": "41/2022",
+      "date_of_report": "14/03/2022",
+      "date_of_incident": "14/03/2022",
+      "time": "02:00",
+      "sections": [
+        "10",
+        "11",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "203",
+        "23",
+        "3",
+        "4",
+        "419",
+        "420",
+        "468",
+        "471",
+        "5",
+        "6",
+        "7"
+      ],
+      "police_station": "FIA CYBER CRIME WING"
+    },
+    "groq": {
+      "model": "llama-3.3-70b-versatile",
+      "accused_count": 1,
+      "victims_count": 0,
+      "weapons_count": 0,
+      "statement_length": 3983
+    },
+    "validation": {
+      "is_fir": true,
+      "confidence": 0.9,
+      "reason": "Heuristic validation (classifier unavailable). Positive hits: 8, negative hits: 0.",
+      "evidence": [
+        {
+          "term": "FIR",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "police station",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "complainant",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "accused",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "section",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "PPC",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "investigation",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "arrest",
+          "direction": "positive",
+          "weight": 1.0
+        }
+      ],
+      "missing_critical": [
+        "FIR Number",
+        "Section / Offence"
+      ],
+      "method": "heuristic_fallback",
+      "keyword_hits": [
+        "FIR",
+        "police station",
+        "complainant",
+        "accused",
+        "section",
+        "PPC",
+        "investigation",
+        "arrest"
+      ],
+      "top_features": [
+        {
+          "term": "FIR",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "police station",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "complainant",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "accused",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "section",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "PPC",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "investigation",
+          "direction": "positive",
+          "weight": 1.0
+        },
+        {
+          "term": "arrest",
+          "direction": "positive",
+          "weight": 1.0
+        }
+      ]
+    },
+    "lime": {
+      "lime_weights": [],
+      "summary": "LIME unavailable: classifier not loaded."
+    },
+    "entity_extraction": {
+      "entities_found": {
+        "firNumber": 1,
+        "caseTitle": 1,
+        "caseNumber": 1,
+        "dateOfReport": 1,
+        "dateOfIncident": 1,
+        "timeOfIncident": 1,
+        "policeStation": 1,
+        "tehsil": 0,
+        "district": 0,
+        "province": 0,
+        "incidentAddress": 1,
+        "beat": 0,
+        "distanceFromPS": 0,
+        "complainantName": 1,
+        "complainantFather": 0,
+        "complainantCNIC": 0,
+        "complainantAge": 0,
+        "complainantPhone": 0,
+        "complainantCaste": 0,
+        "complainantProfession": 1,
+        "complainantAddress": 0,
+        "accusedPersons": 0,
+        "accusedUnknown": 0,
+        "victims": 0,
+        "witnesses": 0,
+        "offenceType": 1,
+        "allOffences": 3,
+        "legalSections": 3,
+        "applicableAct": 1,
+        "sectionReadWith": 1,
+        "weaponsInvolved": 0,
+        "vehiclesInvolved": 3,
+        "vehiclePlates": 4,
+        "hospitalReference": 0,
+        "investigatingOfficer": 0,
+        "ioRank": 1,
+        "beltNumber": 0
+      },
+      "evidence": [
+        {
+          "field": "firNumber",
+          "extracted_value": "41/2022",
+          "extraction_method": "regex:RE_FIR_NO",
+          "snippet": "rclCCRC FAISALABAD No Vear 2022 Date and hour of occurrence 41/2022 ٦ Date and hour when reported 14-03-2022 at 02:00 P^ Court ",
+          "confidence": "high"
+        },
+        {
+          "field": "dateOfReport",
+          "extracted_value": "14-03-2022",
+          "extraction_method": "regex:RE_DATE[0]",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "dateOfIncident",
+          "extracted_value": "14-03-2022",
+          "extraction_method": "regex:RE_DATE[1]",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "timeOfIncident",
+          "extracted_value": "02:00",
+          "extraction_method": "regex:RE_TIME[0]",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "policeStation",
+          "extracted_value": "FIA CYBER CRIME WING",
+          "extraction_method": "regex:RE_POLICE_STATION",
+          "snippet": " UNDER SECTION IS4 CODE OF CRIMINAL PROCEDURE Police StationFIA CYBER CRIME WING Circle Sub- CirclCCRC FAISALABAD No Vear 2022 Date and hour",
+          "confidence": "high"
+        },
+        {
+          "field": "district",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_DISTRICT",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "tehsil",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_TEHSIL",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "province",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_PROVINCE",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "incidentPlace",
+          "extracted_value": "from Police Station \nFAISALABAD",
+          "extraction_method": "regex:RE_INCIDENT_PLACE",
+          "snippet": "f, if any 4 distanced and direction and Place of occurrence from Police Station  FAISALABAD 5 taken regarding investigation , explanation Steps of dela",
+          "confidence": "high"
+        },
+        {
+          "field": "beat",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_BEAT",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "distanceFromPS",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_DISTANCE_FROM_PS",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantName",
+          "extracted_value": "and complaint",
+          "extraction_method": "regex+spacy",
+          "snippet": "W 419, 420, 468, 471 PPC 2. Name and residence of informant and complaint 3 Brief description of offence (with section ) and of prope",
+          "confidence": "high"
+        },
+        {
+          "field": "complainantFather",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_FATHER",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantCNIC",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_CNIC",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantPhone",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_PHONE",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantAge",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_AGE",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantCaste",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_CASTE",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "complainantProfession",
+          "extracted_value": "of Accountancy in Pakistan  Furthermore",
+          "extraction_method": "regex:RE_PROFESSION",
+          "snippet": "artered Accountant ordinance 1961 regulating the profession of Accountancy in Pakistan  Furthermore, the complainant is responsible for due 10 In the year 2021",
+          "confidence": "high"
+        },
+        {
+          "field": "complainantAddress",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_RESIDENCE",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "accusedPersons",
+          "extracted_value": [],
+          "extraction_method": "regex:RE_ACCUSED_LABEL",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "accusedUnknown",
+          "extracted_value": false,
+          "extraction_method": "regex:RE_ACCUSED_UNKNOWN",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "victims",
+          "extracted_value": [],
+          "extraction_method": "regex:RE_VICTIM_LABEL",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "witnesses",
+          "extracted_value": [],
+          "extraction_method": "regex:RE_WITNESS_LABEL",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "legalSections",
+          "extracted_value": [
+            "0057",
+            "41",
+            "14"
+          ],
+          "extraction_method": "regex:RE_SECTION+list",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "applicableAct",
+          "extracted_value": "PECA",
+          "extraction_method": "regex:RE_ACT",
+          "snippet": "arachi 021-35341012 U/5 3, 4, 5, 13, 14, 15, 16, 18, 19, 23 PECA 2016 R/W 419, 420, 468, 471 PPC 2. Name and residence of in",
+          "confidence": "high"
+        },
+        {
+          "field": "sectionReadWith",
+          "extracted_value": "2016 r/w 419, 420, 468, 471",
+          "extraction_method": "regex:RE_SECTION_RW",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "offences",
+          "extracted_value": [
+            "cyber crime",
+            "unfair means",
+            "unauthorized access"
+          ],
+          "extraction_method": "regex:RE_OFFENCE",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "weaponsInvolved",
+          "extracted_value": [],
+          "extraction_method": "regex:RE_WEAPON",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "vehiclesInvolved",
+          "extracted_value": [
+            "car",
+            "suzuki",
+            "spacia"
+          ],
+          "extraction_method": "regex:RE_VEHICLE",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "vehiclePlates",
+          "extracted_value": [
+            "FIA-26",
+            "PECA 2016 R",
+            "LEE-17-1316",
+            "PECA 2016 RW"
+          ],
+          "extraction_method": "regex:RE_PLATE",
+          "snippet": "",
+          "confidence": "high"
+        },
+        {
+          "field": "ioName",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_IO_NAME",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "ioRank",
+          "extracted_value": "Assistant Director",
+          "extraction_method": "regex:RE_IO_RANK",
+          "snippet": " P-203,  Qaswa No. of FIR be sent to the investigation Copy Assistant Director, by the orders of the competent authority ofliccr and conce",
+          "confidence": "high"
+        },
+        {
+          "field": "beltNumber",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_BELT_NUMBER",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "hospitalReference",
+          "extracted_value": null,
+          "extraction_method": "regex:RE_HOSPITAL",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "ner_persons",
+          "extracted_value": [],
+          "extraction_method": "spacy",
+          "snippet": "",
+          "confidence": "none"
+        },
+        {
+          "field": "ner_locations",
+          "extracted_value": [],
+          "extraction_method": "spacy",
+          "snippet": "",
+          "confidence": "none"
+        }
+      ],
+      "ner_backend": "spacy"
+    }
+  },
+  "timings_ms": {
+    "ocr": 218985.2,
+    "regex": 21.9,
+    "groq": 5845.7,
+    "validation": 2.5,
+    "merge": 0.1,
+    "entities": 23.5,
+    "lime": 0.0,
+    "payload": 0.2
+  },
+  "models_ready": {}
+}

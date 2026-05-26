@@ -1,24 +1,3 @@
-"""
-services/lead_generator/__init__.py
-─────────────────────────────────────────────────────────────────────────────
-Phase 4 part A: the orchestrator. This is the public entry point that
-the route layer (api/routes/leads_ai.py) calls.
-
-Flow (design § 4):
-    1. Build context bundle      (services.lead_generator.context)
-    2. Pre-flight depth check    (refuse if too thin)
-    3. Format prompt             (services.lead_generator.prompt)
-    4. Call Ollama               (services.llm_client)
-    5. Parse JSON                (validate.parse_llm_response)
-    6. Validate each lead        (validate.validate_batch)
-    7. Persist via existing      (services.case_lead_service helpers,
-       case_lead_service          but the model's `event_source` flag
-       infrastructure)            stays AI so the UI knows the provenance)
-    8. Return persisted rows
-
-Every step that can fail does so with a clean exception that the route
-layer maps to a sensible HTTP status — design § 9.
-"""
 from __future__ import annotations
 
 import logging
@@ -31,8 +10,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from models import (
-    User, Case, Lead, TimelineEvent,
-    Activity,
+    User, Case, Lead, TimelineEvent, Activity,
 )
 from services import audit_service as audit
 from services.case_lead_service import (
@@ -66,26 +44,83 @@ log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public result type — what the route returns to the frontend
+# Result type
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class GenerationResult:
-    """Single payload returned by `generate_leads`. Shaped so the route
-    can serialise it directly with FastAPI's default JSON encoder."""
     case_id: str
     accepted_leads: List[LeadRow]
-    rejected_count: int                  # for the "X of Y leads accepted" toast
-    rejected_issues: List[List[str]]     # parallel to rejected, for debug
-    reason: Optional[str] = None         # populated when LLM returns 0 leads
+    rejected_count: int
+    rejected_issues: List[List[str]]
+    reason: Optional[str] = None
     duration_ms: int = 0
     model: str = ""
+    # Telemetry — useful for the FYP report's evaluation chapter
+    context_depth_score: int = 0
+    gap_count: int = 0
+    raw_lead_count: int = 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Persistence — same path as case_lead_service.add_manual_lead, but with
-# event_source flipped to AI and a few extra fields wired up
+# Persistence
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _format_provenance_suffix(raw: Dict[str, Any]) -> str:
+    """Build a readable provenance footer that gets appended to the
+    Lead.description. The existing LeadDetailDialog renders the
+    description verbatim, so this is how we surface the full citation
+    set without adding new columns.
+
+    Example output:
+
+        ─── AI Lead Provenance ───
+        Evidence basis: Suspect identified by witness; vehicle matches FIR entity.
+        Cited suspects: SUS-2053-01 (CNIC 35201-1234567-1)
+        Cited witnesses: WIT-2053-01
+        Cited evidence: EVD-2053-02
+        Addresses gap: SUSPECT_NO_ALIBI
+    """
+    lines = []
+
+    basis = (raw.get("evidence_basis") or "").strip()
+    if basis:
+        lines.append(f"Evidence basis: {basis}")
+
+    def _join(items: Optional[List[str]]) -> str:
+        return ", ".join(items) if items else ""
+
+    suspects = _join(raw.get("cited_suspect_ids"))
+    cnics    = _join(raw.get("cited_cnics"))
+    if suspects or cnics:
+        bits = []
+        if suspects:
+            bits.append(suspects)
+        if cnics:
+            bits.append(f"CNICs: {cnics}")
+        lines.append(f"Cited suspects: {' · '.join(bits)}")
+
+    if raw.get("cited_victim_ids"):
+        lines.append(f"Cited victims: {_join(raw['cited_victim_ids'])}")
+    if raw.get("cited_witness_ids"):
+        lines.append(f"Cited witnesses: {_join(raw['cited_witness_ids'])}")
+    if raw.get("cited_evidence_ids"):
+        lines.append(f"Cited evidence: {_join(raw['cited_evidence_ids'])}")
+    if raw.get("cited_finding_ids"):
+        lines.append(f"Cited forensic findings: {_join(raw['cited_finding_ids'])}")
+    if raw.get("cited_case_ids"):
+        lines.append(f"Cited cases: {_join(raw['cited_case_ids'])}")
+    if raw.get("cited_note_ids"):
+        lines.append(f"Cited notes: {_join(raw['cited_note_ids'])}")
+
+    gap = (raw.get("addresses_gap") or "").strip()
+    if gap:
+        lines.append(f"Addresses gap: {gap}")
+
+    if not lines:
+        return ""
+    return "\n\n─── AI Lead Provenance ───\n" + "\n".join(lines)
+
 
 def _persist_ai_lead(
     db: Session,
@@ -94,33 +129,24 @@ def _persist_ai_lead(
     user: User,
     request: Optional[Request],
     raw: Dict[str, Any],
+    lead_index_offset: int = 0
 ) -> Lead:
-    """Insert one AI-generated lead and the matching timeline + audit
-    rows. Mirrors the structure of add_manual_lead so audit + timeline
-    history stays consistent across both flows."""
+    """Insert one AI-generated lead + the timeline + audit rows."""
     type_id = _lead_type_id(db, raw["type"])
     if type_id is None:
-        # Shouldn't happen — validator already checked the type — but
-        # double-check because the DB has the final say. The validator
-        # uses an in-memory list; if someone deactivates a LeadType in
-        # the DB after server start, this guards the difference.
         raise HTTPException(
             status_code=400,
             detail=f"Lead type '{raw['type']}' missing from lkp_lead_types",
         )
 
-    # Try to resolve cited_suspect_ids[0] → CaseSuspect FK. The first
-    # citation is treated as primary; the rest stay in evidence_basis.
+    # Suggested suspect: first cited_suspect_id, if any.
     suspect_fk = None
-    cited = raw.get("cited_suspect_ids") or []
-    if cited:
-        fk, _, _ = _resolve_suggested_suspect(
-            db, case=case, name_or_id=cited[0],
-        )
+    sids = raw.get("cited_suspect_ids") or []
+    if sids:
+        fk, _, _ = _resolve_suggested_suspect(db, case=case, name_or_id=sids[0])
         suspect_fk = fk
 
-    # Pick the first cited case ID that isn't the focal case as
-    # similar_case_id. The validator already confirmed it's linked.
+    # Similar case: first non-focal cited_case_id.
     similar_case_pk = None
     for cid in (raw.get("cited_case_ids") or []):
         if cid != case.case_id:
@@ -128,16 +154,13 @@ def _persist_ai_lead(
             if similar_case_pk:
                 break
 
-    # Combine description + evidence_basis so the LeadDetailDialog UI
-    # surfaces the justification without needing a new column.
+    # Build description with the full provenance footer.
     description = raw["description"].strip()
-    basis = raw.get("evidence_basis", "").strip()
-    if basis:
-        description = f"{description}\n\nEvidence basis: {basis}"
+    description += _format_provenance_suffix(raw)
 
     lead = Lead(
         case_id_fk           = case.id,
-        lead_id              = _next_lead_id(case.case_id, count=len(case.leads)),
+        lead_id              = _next_lead_id(case.case_id, count=len(case.leads) + lead_index_offset),
         event_source         = EVENT_SOURCE_AI,
         type_id              = type_id,
         status_id            = _lead_status_id_by_label(db, "New"),
@@ -150,9 +173,9 @@ def _persist_ai_lead(
         created_by_user_id   = user.id,
     )
     db.add(lead)
-    db.flush()  # gets us lead.id for the timeline + audit rows
+    db.flush()
 
-    # Timeline event — what the user sees in the case timeline tab.
+    # Timeline event for the case timeline tab.
     now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk    = case.id,
@@ -160,7 +183,7 @@ def _persist_ai_lead(
         event_source  = "SYSTEM",
         event_type_id = _timeline_event_type_id(db, "AI_LEAD_GENERATED"),
         title         = f"AI Lead Generated: {raw['type']}",
-        description   = description[:200],
+        description   = raw["description"][:200],
         officer_name  = _format_officer_name(user),
         severity_id   = _severity_id_by_label(db, raw.get("severity") or "Normal"),
         event_date    = now.date(),
@@ -169,10 +192,10 @@ def _persist_ai_lead(
         editable      = False,
     ))
 
-    # Activity feed (dashboard).
+    # Activity feed entry.
     db.add(Activity(
         title       = f"AI Lead {lead.lead_id} generated",
-        description = description[:200],
+        description = raw["description"][:200],
         type        = "lead",
         case_id     = case.id,
         user_id     = user.id,
@@ -183,18 +206,20 @@ def _persist_ai_lead(
     try:
         audit.log_event(
             db, user_id=user.id, action="CREATE", module="Case Management",
-            detail=f"AI lead {lead.lead_id} generated for case {case.case_id} (type={raw['type']})",
+            detail=(
+                f"AI lead {lead.lead_id} generated for case {case.case_id} "
+                f"(type={raw['type']}, gap={raw.get('addresses_gap') or '-'})"
+            ),
             target_type="lead", target_id=lead.lead_id, request=request,
         )
     except Exception:
-        # Audit failure shouldn't block lead persistence.
         log.exception("Failed to write audit log for AI lead %s", lead.lead_id)
 
     return lead
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public API
+# Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_leads(
@@ -205,12 +230,10 @@ def generate_leads(
     request: Optional[Request] = None,
     strict_validation: bool = True,
 ) -> GenerationResult:
-    """The one function the route calls. Does the full pipeline and
-    returns the result. Raises HTTPException on any non-recoverable
-    failure (maps to a clean response code on the wire)."""
+    """Full pipeline. Raises HTTPException on non-recoverable failures
+    (route layer maps each to a clean HTTP status — see design § 9)."""
 
-    # ── 0. Liveness check ─────────────────────────────────────────
-    # Cheap probe before we do any DB work. § 9 row 1.
+    # 0. Liveness probe
     if not llm_client.is_available():
         log.warning("[lead-gen] Ollama not reachable. Returning 503.")
         raise HTTPException(
@@ -218,17 +241,17 @@ def generate_leads(
             detail="AI service unavailable. Start Ollama and try again.",
         )
 
-    # ── 1. Build context bundle ───────────────────────────────────
+    # 1. Context bundle
     ctx: CaseContext = build_case_context(db, user=user, case_id=case_id)
     log.info(
-        "[lead-gen] case=%s context built: %d suspects, %d evidence, %d entities, %d linked",
-        ctx.case_id, len(ctx.suspects), len(ctx.evidence),
-        len(ctx.entities), len(ctx.linked),
+        "[lead-gen] case=%s context built: %d suspects, %d victims, %d witnesses, "
+        "%d evidence, %d findings, %d entities, %d linked, %d nearby, %d gaps",
+        ctx.case_id, len(ctx.suspects), len(ctx.victims), len(ctx.witnesses),
+        len(ctx.evidence), len(ctx.forensic_findings), len(ctx.entities),
+        len(ctx.linked), len(ctx.nearby), len(ctx.gaps),
     )
 
-    # ── 2. Depth check ───────────────────────────────────────────
-    # § 9 row 6: don't waste an LLM call on a brand-new case with
-    # nothing in it. Return a friendly explanation instead.
+    # 2. Depth check
     depth = assess_context_depth(ctx)
     if not depth.is_deep_enough:
         log.info(
@@ -236,31 +259,33 @@ def generate_leads(
             ctx.case_id, depth.score,
         )
         return GenerationResult(
-            case_id        = ctx.case_id,
-            accepted_leads = [],
-            rejected_count = 0,
-            rejected_issues= [],
-            reason         = (
+            case_id            = ctx.case_id,
+            accepted_leads     = [],
+            rejected_count     = 0,
+            rejected_issues    = [],
+            reason             = (
                 "Case has too little structured data for meaningful AI leads. "
-                f"Add suspects, evidence, or witnesses first. ({'; '.join(depth.reasons)})"
+                f"Add suspects, evidence, or witnesses first. "
+                f"({'; '.join(depth.reasons)})"
             ),
+            context_depth_score= depth.score,
+            gap_count          = len(ctx.gaps),
         )
 
-    # ── 3. Format prompt ──────────────────────────────────────────
+    # 3. Format prompt
     user_prompt = build_user_prompt(ctx)
     log.debug("[lead-gen] case=%s prompt length=%d chars", ctx.case_id, len(user_prompt))
 
-    # ── 4. Call Ollama ───────────────────────────────────────────
+    # 4. LLM call
     try:
         resp = llm_client.generate(
-            system_prompt = SYSTEM_PROMPT,
-            user_prompt   = user_prompt,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            max_tokens=600,
         )
     except LLMUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LLMTimeout as e:
-        # § 9 row 5: timeout maps to 504, not 500. The frontend can
-        # then offer a retry.
         raise HTTPException(status_code=504, detail=str(e))
     except (LLMBadResponse, LLMError) as e:
         log.exception("[lead-gen] LLM call failed for case %s", ctx.case_id)
@@ -271,77 +296,68 @@ def generate_leads(
         ctx.case_id, resp.duration_ms, resp.eval_count,
     )
 
-    # ── 5. Parse the JSON ────────────────────────────────────────
-    # § 9 row 2: malformed JSON degrades to "no leads" rather than a
-    # 500. We tried our best in parse_llm_response to recover; if it
-    # still fails, the user gets a friendly empty result.
+    # 5. Parse
     try:
         parsed = parse_llm_response(resp.text)
     except ValueError as e:
         log.error(
-            "[lead-gen] case=%s LLM returned unparseable JSON: %s. Raw: %s",
+            "[lead-gen] case=%s unparseable JSON: %s. Raw: %s",
             ctx.case_id, e, resp.text[:500],
         )
         return GenerationResult(
-            case_id        = ctx.case_id,
-            accepted_leads = [],
-            rejected_count = 0,
-            rejected_issues= [],
-            reason         = "The AI model returned malformed output. Please try again.",
-            duration_ms    = resp.duration_ms,
-            model          = resp.model,
+            case_id            = ctx.case_id,
+            accepted_leads     = [],
+            rejected_count     = 0,
+            rejected_issues    = [],
+            reason             = "The AI model returned malformed output. Please try again.",
+            duration_ms        = resp.duration_ms,
+            model              = resp.model,
+            context_depth_score= depth.score,
+            gap_count          = len(ctx.gaps),
         )
 
     raw_leads = parsed.get("leads") or []
     if not raw_leads:
-        # § 9 row 4: 0 leads is a valid output — the LLM may have
-        # decided the case is too thin even though our heuristic
-        # said it was fine. Surface its reason if available.
         return GenerationResult(
-            case_id        = ctx.case_id,
-            accepted_leads = [],
-            rejected_count = 0,
-            rejected_issues= [],
-            reason         = parsed.get("reason") or
-                            "The AI model didn't find any grounded leads for this case.",
-            duration_ms    = resp.duration_ms,
-            model          = resp.model,
+            case_id            = ctx.case_id,
+            accepted_leads     = [],
+            rejected_count     = 0,
+            rejected_issues    = [],
+            reason             = parsed.get("reason")
+                                  or "The AI model didn't find any grounded leads for this case.",
+            duration_ms        = resp.duration_ms,
+            model              = resp.model,
+            context_depth_score= depth.score,
+            gap_count          = len(ctx.gaps),
         )
 
-    # ── 6. Validate each lead ────────────────────────────────────
+    # 6. Validate
     batch: BatchValidationReport = validate_batch(
         raw_leads, ctx, strict=strict_validation,
     )
 
-    # ── 7. Persist accepted leads ────────────────────────────────
+    # 7. Persist accepted
     persisted_rows: List[LeadRow] = []
     case_row = (
-        db.query(Case)
-        .filter(Case.id == ctx.case_internal_id)
-        .first()
+        db.query(Case).filter(Case.id == ctx.case_internal_id).first()
     )
 
-    for raw in batch.accepted:
+    for i, raw in enumerate(batch.accepted):
         try:
             lead = _persist_ai_lead(
-                db, case=case_row, user=user, request=request, raw=raw,
+                db, case=case_row, user=user, request=request, raw=raw,  lead_index_offset=i,
             )
-            # Rehydrate so the response shape matches what the list
-            # endpoint returns — keeps the UI's LeadRow shape uniform.
             fresh = _resolve_lead(db, case=case_row, lead_id=lead.lead_id)
             persisted_rows.append(_row_from_lead(fresh))
         except HTTPException:
-            # Re-raise: a 400 from _persist_ai_lead means the LeadType
-            # vanished mid-flight, which is a real config error.
             db.rollback()
             raise
         except Exception:
             log.exception(
-                "[lead-gen] Failed to persist accepted lead for case %s. "
-                "Continuing with the rest.", ctx.case_id,
+                "[lead-gen] Failed to persist accepted lead for case %s. Continuing.",
+                ctx.case_id,
             )
-            # Don't roll back the whole batch — if 2 of 4 leads
-            # save successfully, that's still useful to the user.
+            db.rollback()
 
     try:
         db.commit()
@@ -354,17 +370,21 @@ def generate_leads(
         )
 
     log.info(
-        "[lead-gen] case=%s done. %d accepted, %d rejected.",
+        "[lead-gen] case=%s done. %d accepted, %d rejected, %d gaps addressed",
         ctx.case_id, len(persisted_rows), len(batch.rejected),
+        sum(1 for l in batch.accepted if l.get("addresses_gap")),
     )
 
     return GenerationResult(
-        case_id        = ctx.case_id,
-        accepted_leads = persisted_rows,
-        rejected_count = len(batch.rejected),
-        rejected_issues= [r.get("issues", []) for r in batch.rejected],
-        reason         = None if persisted_rows else
-                         "All generated leads failed validation. None were saved.",
-        duration_ms    = resp.duration_ms,
-        model          = resp.model,
+        case_id            = ctx.case_id,
+        accepted_leads     = persisted_rows,
+        rejected_count     = len(batch.rejected),
+        rejected_issues    = [r.get("issues", []) for r in batch.rejected],
+        reason             = None if persisted_rows else
+                             "All generated leads failed validation. None were saved.",
+        duration_ms        = resp.duration_ms,
+        model              = resp.model,
+        context_depth_score= depth.score,
+        gap_count          = len(ctx.gaps),
+        raw_lead_count     = len(raw_leads),
     )

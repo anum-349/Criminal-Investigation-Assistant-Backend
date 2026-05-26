@@ -229,9 +229,7 @@ def get_hotspots(
         .filter(Location.longitude.isnot(None))
         .group_by(City.id, Province.id)
     )
-    if user.role != "admin":
-        q = q.filter(Case.assigned_investigator_id == user.id)
-
+    
     rows = q.all()
     hotspots: List[HotspotItem] = []
     for idx, r in enumerate(rows, start=1):

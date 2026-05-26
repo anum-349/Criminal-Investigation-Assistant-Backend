@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
 from fir_api.pipeline.model_loader import warmup
-from routes import analytics_routes, case_links_generate, case_routes, drafts_routes, investigator_route, leads_ai_routes, lookup_routes, main_route, notification_routes, notifications_ws, report_routes, ticket_routes, user_route
+from routes import analytics_routes, case_links_generate, case_routes, drafts_routes, fir_route, investigator_route, leads_ai_routes, lookup_routes, main_route, notification_routes, notifications_ws, report_routes, ticket_routes, user_route
 
 load_dotenv()
 
@@ -77,6 +77,7 @@ app.include_router(analytics_routes.router, prefix="/api/analytics", tags=["Anal
 app.include_router(notification_routes.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(drafts_routes.router, prefix="/api/investigator/cases/case-drafts", tags=["CaseDrafts"])
 app.include_router(lookup_routes.router, prefix="/api/investigator/lookups",      tags=["Lookups"])
+app.include_router(fir_route.router, prefix="/api", tags=["FIR Processing"])
 app.include_router(leads_ai_routes.router, prefix="/api/investigator/cases", tags=["AI Leads"])
 app.include_router(case_links_generate.router, prefix="/api/investigator/cases", tags=["case-links"])
 app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
