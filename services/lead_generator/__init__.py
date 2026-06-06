@@ -25,8 +25,9 @@ from services.case_lead_service import (
     _resolve_similar_case,
     _timeline_event_type_id,
 )
+from services.db_retry import get_case_with_retry
 from services.service_helper import _format_officer_name
-from schemas.case_lead_schema import LeadRow
+from schemas.leads.case_lead_schema import LeadRow
 
 from services import llm_client
 from services.llm_client import (
@@ -42,11 +43,6 @@ from services.lead_generator.validate import (
 
 log = logging.getLogger(__name__)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Result type
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class GenerationResult:
     case_id: str
@@ -56,15 +52,10 @@ class GenerationResult:
     reason: Optional[str] = None
     duration_ms: int = 0
     model: str = ""
-    # Telemetry — useful for the FYP report's evaluation chapter
+
     context_depth_score: int = 0
     gap_count: int = 0
     raw_lead_count: int = 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Persistence
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _format_provenance_suffix(raw: Dict[str, Any]) -> str:
     """Build a readable provenance footer that gets appended to the
@@ -139,14 +130,12 @@ def _persist_ai_lead(
             detail=f"Lead type '{raw['type']}' missing from lkp_lead_types",
         )
 
-    # Suggested suspect: first cited_suspect_id, if any.
     suspect_fk = None
     sids = raw.get("cited_suspect_ids") or []
     if sids:
         fk, _, _ = _resolve_suggested_suspect(db, case=case, name_or_id=sids[0])
         suspect_fk = fk
 
-    # Similar case: first non-focal cited_case_id.
     similar_case_pk = None
     for cid in (raw.get("cited_case_ids") or []):
         if cid != case.case_id:
@@ -154,7 +143,6 @@ def _persist_ai_lead(
             if similar_case_pk:
                 break
 
-    # Build description with the full provenance footer.
     description = raw["description"].strip()
     description += _format_provenance_suffix(raw)
 
@@ -175,7 +163,6 @@ def _persist_ai_lead(
     db.add(lead)
     db.flush()
 
-    # Timeline event for the case timeline tab.
     now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk    = case.id,
@@ -192,7 +179,6 @@ def _persist_ai_lead(
         editable      = False,
     ))
 
-    # Activity feed entry.
     db.add(Activity(
         title       = f"AI Lead {lead.lead_id} generated",
         description = raw["description"][:200],
@@ -202,7 +188,6 @@ def _persist_ai_lead(
         created_at  = now,
     ))
 
-    # Audit log.
     try:
         audit.log_event(
             db, user_id=user.id, action="CREATE", module="Case Management",
@@ -217,11 +202,6 @@ def _persist_ai_lead(
 
     return lead
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
 def generate_leads(
     db: Session,
     *,
@@ -233,6 +213,7 @@ def generate_leads(
     """Full pipeline. Raises HTTPException on non-recoverable failures
     (route layer maps each to a clean HTTP status — see design § 9)."""
 
+    get_case_with_retry(db, case_id)  # Ensure the case exists and is visible to the user.
     # 0. Liveness probe
     if not llm_client.is_available():
         log.warning("[lead-gen] Ollama not reachable. Returning 503.")

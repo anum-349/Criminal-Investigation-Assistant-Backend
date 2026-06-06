@@ -19,7 +19,6 @@ cymem==2.0.13
 dnspython==2.8.0
 ecdsa==0.19.1
 email-validator==2.3.0
-# en_core_web_sm @ file:///C:/Users/akraj/Desktop/Senior%20Design%20Project/Criminal_Investigation_Assistant_Backend/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
 Faker==40.18.0
 fastapi==0.129.0
 fastapi-cli==0.0.23
@@ -102,7 +101,6 @@ sympy==1.14.0
 thinc==8.3.11
 threadpoolctl==3.6.0
 tokenizers==0.20.3
-torch==2.4.1
 tqdm==4.67.3
 transformers==4.46.0
 typer==0.24.0

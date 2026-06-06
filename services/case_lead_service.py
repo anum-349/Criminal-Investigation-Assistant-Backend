@@ -16,7 +16,7 @@ from models import (
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
-from schemas.case_lead_schema import (
+from schemas.leads.case_lead_schema import (
     LeadRow, LeadCounts, LeadSuspectRef,
     CaseLeadsList,
     AddManualLeadRequest, UpdateLeadStatusRequest,

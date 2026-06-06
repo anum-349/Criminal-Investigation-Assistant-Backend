@@ -11,7 +11,7 @@ from models import (
     Case, Lead, TimelineEvent,
     Location, Province, CaseType, CaseStatus, Severity,
 )
-from schemas.analytics_schema import (
+from schemas.admin.analytics_schema import (
     MonthlyTrendItem, CrimeByTypeItem, CrimeByProvinceItem,
     StatusDistItem, SeverityTrendItem, SummaryStats, HeatmapData,
     PredictionTrendItem, ProvinceForecastItem, CrimeForecastItem,
@@ -23,11 +23,9 @@ from services import audit_service as audit
 import logging
 
 from services import predictive_ai_service as pai
-from schemas.predictive_ai_schema import PredictiveAnalyticsResponse
+from schemas.leads.predictive_ai_schema import PredictiveAnalyticsResponse
 
 log = logging.getLogger(__name__)
-
-# ── helpers ────────────────────────────────────────────────────────────────
 
 def _date_range(date_range: str):
     """Return (date_from, date_to) for the requested range string."""
@@ -65,8 +63,6 @@ def _pct_change(current: int, previous: int) -> str:
     return f"{sign}{diff:.0f}%"
 
 
-# ── overview ───────────────────────────────────────────────────────────────
-
 def get_overview(
     db: Session, *,
     date_range: str,
@@ -78,14 +74,12 @@ def get_overview(
 
     date_from, date_to = _date_range(date_range)
 
-    # Base case query (not deleted)
     base_q = db.query(Case).filter(
         Case.is_deleted == False,
         Case.incident_date >= date_from,
         Case.incident_date <= date_to,
     )
 
-    # Province filter
     if province and province != "All Provinces":
         base_q = (
             base_q
@@ -94,7 +88,6 @@ def get_overview(
             .filter(Province.label == province)
         )
 
-    # Crime type filter
     if crime_type and crime_type != "All Types":
         base_q = (
             base_q
@@ -104,7 +97,6 @@ def get_overview(
 
     all_cases = base_q.all()
 
-    # ── Summary stats ─────────────────────────────────────────────────────
     total_now  = len(all_cases)
     prev_from  = date_from - (date_to - date_from)
     prev_cases = db.query(Case).filter(
@@ -113,8 +105,6 @@ def get_overview(
         Case.incident_date < date_from,
     ).count()
 
-    # Solved this month = cases whose status label contains "Solved"/"Closed"
-    # and were updated in the current calendar month
     this_month_start = date.today().replace(day=1)
     solved_ids = {
         r.id for r in db.query(CaseStatus)
@@ -128,7 +118,6 @@ def get_overview(
         and c.updated_at.date() >= this_month_start
     )
 
-    # Average resolution days (closed cases only)
     closed_cases = [
         c for c in all_cases
         if c.case_status_id in solved_ids and c.closed_at and c.reporting_date
@@ -139,7 +128,6 @@ def get_overview(
         if closed_cases else 0
     )
 
-    # High severity
     high_sev_ids = {
         r.id for r in db.query(Severity)
         .filter(Severity.label.in_(["High", "Critical", "high", "critical"]))
@@ -157,9 +145,7 @@ def get_overview(
         avgResolutionChange  = "0d",
         highSeverityChange   = "+0%",
     )
-
-    # ── Monthly trend ────────────────────────────────────────────────────
-    # Group cases by (year, month)
+    
     case_by_month:  dict = defaultdict(int)
     solved_by_month: dict = defaultdict(int)
     for c in all_cases:
@@ -169,7 +155,6 @@ def get_overview(
             if c.case_status_id in solved_ids:
                 solved_by_month[key] += 1
 
-    # Leads per month
     leads_q = (
         db.query(
             extract("year",  Lead.generated_at).label("yr"),
@@ -195,7 +180,6 @@ def get_overview(
         for yr, mo in _months_in_range(date_from, date_to)
     ]
 
-    # ── Cases by province ────────────────────────────────────────────────
     province_q = (
         db.query(Province.label, sa_func.count(Case.id).label("cnt"))
         .join(Location, Location.province_id == Province.id)
@@ -214,7 +198,6 @@ def get_overview(
         for label, cnt in province_q
     ]
 
-    # ── Status distribution ──────────────────────────────────────────────
     status_q = (
         db.query(CaseStatus.label, sa_func.count(Case.id).label("cnt"))
         .join(Case, Case.case_status_id == CaseStatus.id)
@@ -238,8 +221,6 @@ def get_overview(
     )
 
 
-# ── trends ─────────────────────────────────────────────────────────────────
-
 def get_trends(
     db: Session, *,
     date_range: str,
@@ -251,7 +232,6 @@ def get_trends(
 
     date_from, date_to = _date_range(date_range)
 
-    # Severity buckets — map severity rank to label bucket
     sev_map: dict = {}
     for row in db.query(Severity).all():
         label_lower = (row.label or "").lower()
@@ -339,8 +319,6 @@ def get_trends(
     )
 
 
-# ── breakdown ──────────────────────────────────────────────────────────────
-
 def get_breakdown(
     db: Session, *,
     date_range: str,
@@ -384,9 +362,6 @@ def get_breakdown(
 
     return AnalyticsBreakdownResponse(crimeByType=crime_by_type)
 
-
-# ── heatmap ────────────────────────────────────────────────────────────────
-
 def get_heatmap(
     db: Session, *,
     date_range: str,
@@ -406,7 +381,6 @@ def get_heatmap(
         .all()
     )
 
-    # day 0=Mon … 6=Sun, hour buckets [0,3,6,9,12,15,18,21]
     DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     HOURS = [0, 3, 6, 9, 12, 15, 18, 21]
 
@@ -418,7 +392,6 @@ def get_heatmap(
         try:
             dow = ev.event_date.weekday()        # 0=Mon
             hr  = int(ev.event_time.split(":")[0])
-            # Find closest bucket
             bucket = max(i for i, h in enumerate(HOURS) if h <= hr)
             grid[dow][bucket] += 1
         except (ValueError, IndexError):
@@ -435,7 +408,6 @@ def get_heatmap(
     )
 
 
-# ── predictions (statistical only — no ML model yet) ──────────────────────
 def get_predictions(
     db: Session, *,
     user,
@@ -459,8 +431,6 @@ def get_predictions(
     enabled incrementally.
     """
     return pai.run_predictions(db, user=user, request=request)
-
-# ── audit helper ───────────────────────────────────────────────────────────
 
 def _audit(db, user, request, detail: str):
     try:

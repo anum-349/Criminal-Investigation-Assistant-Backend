@@ -8,11 +8,6 @@ from fir_api.pipeline.model_loader import models
 
 logger = logging.getLogger("fir.entities")
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Regex patterns — Pakistani FIR format
-# ═════════════════════════════════════════════════════════════════════════════
-
 RE_FIR_NO = re.compile(
     r"(?:"
     r"fir(?:\s+no\.?|\s+number|\s*#)?|"
@@ -81,9 +76,6 @@ RE_PROVINCE = re.compile(
 
 RE_CNIC = re.compile(r"\b(\d{5}\s*[\-]?\s*\d{7}\s*[\-]?\s*\d)\b")
 
-# FIX: RE_PHONE — must match a Pakistani mobile/landline format only.
-# Old pattern matched bare digit sequences including IMEI numbers.
-# Now requires the number to start with 0 (Pakistani) or +92, with 10-11 digits.
 RE_PHONE = re.compile(
     r"(?:phone|mobile|contact|tel|cell|موبائل|فون|رابطہ)\s*[:\-]?\s*"
     r"(\+?92[-\s]?\d{3}[-\s]?\d{7}|"
@@ -92,7 +84,6 @@ RE_PHONE = re.compile(
     re.I,
 )
 
-# FIX: RE_PHONE_BARE — explicit 03xx start (11 digits), so IMEI (14+ digits) won't match.
 RE_PHONE_BARE = re.compile(
     r"\b(03\d{2}[\-\s]?\d{3}[\-\s]?\d{4})\b"
     r"|\b(\+92[\-\s]?3\d{2}[\-\s]?\d{3}[\-\s]?\d{4})\b"
@@ -100,9 +91,6 @@ RE_PHONE_BARE = re.compile(
 
 RE_AGE = re.compile(r"\b(?:age|aged|عمر)\s*[:\-]?\s*(\d{1,3})\s*(?:years?|سال)?", re.I)
 
-# FIX: RE_FATHER — the old pattern fired on "s/o" appearing inside words like
-# "software", extracting garbage like "ftware".  Added a word-boundary assertion
-# before the s/o abbreviation and tightened the separator requirement.
 RE_FATHER = re.compile(
     r"(?<![a-z])"            # negative lookbehind: not preceded by a-z (catches "soft**ware**")
     r"\b(?:"
@@ -309,9 +297,6 @@ RE_VEHICLE = re.compile(
     re.I,
 )
 
-# FIX: RE_PLATE — the old pattern stopped at 2 alpha chars after hyphen, so
-# "LEE-17-1316" was cut to "LEE-17".  Extended to capture full Pakistani plate
-# format including multiple hyphen groups.
 RE_PLATE = re.compile(
     r"\b([A-Z]{2,4}[\s\-]\d{2,5}(?:[\s\-][A-Z0-9]{1,6})*)\b"
 )
@@ -332,11 +317,6 @@ RE_IO_RANK = re.compile(
     re.I,
 )
 
-# FIX: RE_IO_NAME — the old pattern matched "i.o." inside common words like
-# "information" (the substring "ion" → no, but "transmission of information"
-# triggered because "i" + ".o." was found).  The real issue is the pattern
-# has no word-boundary on the right of the abbreviation.  Also added
-# "entrusted to" phrasing common in English FIRs.
 RE_IO_NAME = re.compile(
     r"(?:"
     r"(?:investigation\s+is\s+)?entrusted\s+to|"
@@ -365,11 +345,6 @@ RE_HOSPITAL = re.compile(
     r"(\d{2,6})?",
     re.I,
 )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _first(pat: re.Pattern, text: str) -> Optional[str]:
     m = pat.search(text)
@@ -412,11 +387,6 @@ def _evidence(field: str, value: Any, method: str, snippet: str) -> Dict:
         "confidence":       "high" if has_value else "none",
     }
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# spaCy NER helper
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _spacy_ents(text: str) -> Dict[str, List[str]]:
     nlp = models.spacy_nlp
     if nlp is None:
@@ -427,11 +397,6 @@ def _spacy_ents(text: str) -> Dict[str, List[str]]:
         if ent.label_ in result:
             result[ent.label_].append(ent.text.strip())
     return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Main extractor
-# ═════════════════════════════════════════════════════════════════════════════
 
 def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
     """Extract all structured fields from `text` (English translation or raw).
@@ -446,7 +411,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
     orig = original_text or text   # Urdu/mixed OCR (for Urdu-script patterns)
     xai: List[Dict] = []
 
-    # ── FIR Number ────────────────────────────────────────────────────────────
     fir_no = _first(RE_FIR_NO, t) or _first(RE_FIR_NO, orig)
     if not fir_no:
         m = RE_FIR_NO_BARE.search(t) or RE_FIR_NO_BARE.search(orig)
@@ -454,7 +418,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
 
     xai.append(_evidence("firNumber", fir_no, "regex:RE_FIR_NO", _snippet(t, fir_no or "")))
 
-    # ── Dates ─────────────────────────────────────────────────────────────────
     all_dates = _all(RE_DATE, t)
     date_of_report   = all_dates[0] if len(all_dates) >= 1 else None
     date_of_incident = all_dates[1] if len(all_dates) >= 2 else date_of_report
@@ -462,11 +425,9 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
     xai.append(_evidence("dateOfReport",   date_of_report,   "regex:RE_DATE[0]", ""))
     xai.append(_evidence("dateOfIncident", date_of_incident, "regex:RE_DATE[1]", ""))
 
-    # ── Time ──────────────────────────────────────────────────────────────────
     time_of_incident = _first(RE_TIME, t)
     xai.append(_evidence("timeOfIncident", time_of_incident, "regex:RE_TIME[0]", ""))
 
-    # ── Location fields ───────────────────────────────────────────────────────
     police_station = _first(RE_POLICE_STATION, t) or _first(RE_POLICE_STATION, orig)
     district       = _first(RE_DISTRICT, t)       or _first(RE_DISTRICT, orig)
     tehsil         = _first(RE_TEHSIL,   t)       or _first(RE_TEHSIL,   orig)
@@ -492,7 +453,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
         _evidence("distanceFromPS",distance_from_ps,"regex:RE_DISTANCE_FROM_PS",""),
     ])
 
-    # ── Complainant ───────────────────────────────────────────────────────────
     complainant_cnic       = _first(RE_CNIC,  t) or _first(RE_CNIC,  orig)
     complainant_phone      = _first(RE_PHONE, t) or _first(RE_PHONE_BARE, t) or \
                              _first(RE_PHONE, orig) or _first(RE_PHONE_BARE, orig)
@@ -503,13 +463,11 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
     complainant_address    = _first(RE_RESIDENCE,  t) or _first(RE_RESIDENCE, orig)
     label_complainant      = _first(RE_COMPLAINANT_LABEL, t) or _first(RE_COMPLAINANT_LABEL, orig)
 
-    # ── Accused / Victims / Witnesses ────────────────────────────────────────
     label_accused  = _all(RE_ACCUSED_LABEL,  t) + _all(RE_ACCUSED_LABEL,  orig)
     accused_unknown = bool(RE_ACCUSED_UNKNOWN.search(t) or RE_ACCUSED_UNKNOWN.search(orig))
     label_victims  = _all(RE_VICTIM_LABEL,   t) + _all(RE_VICTIM_LABEL,  orig)
     label_witnesses= _all(RE_WITNESS_LABEL,  t) + _all(RE_WITNESS_LABEL, orig)
 
-    # Deduplicate label lists
     for lst_name in ("label_accused", "label_victims", "label_witnesses"):
         lst = locals()[lst_name]
         seen: set = set()
@@ -518,7 +476,7 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
             if item.lower() not in seen:
                 deduped.append(item)
                 seen.add(item.lower())
-        # Re-assign via a dict trick since we can't assign to locals()
+
         if lst_name == "label_accused":
             label_accused = deduped
         elif lst_name == "label_victims":
@@ -526,7 +484,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
         else:
             label_witnesses = deduped
 
-    # ── spaCy NER ─────────────────────────────────────────────────────────────
     spacy_ents = _spacy_ents(t)
     extra_persons = [
         p for p in spacy_ents["PERSON"]
@@ -547,7 +504,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
 
     complainant_name = label_complainant or (extra_persons[0] if extra_persons else None)
 
-    # ── Legal ─────────────────────────────────────────────────────────────────
     sections = _all(RE_SECTION, t) + _all(RE_SECTION, orig)
     if len(sections) < 2:
         list_sections = [s for s in _all(RE_SECTION_LIST_ITEM, t) if 1 <= int(s) <= 999]
@@ -569,14 +525,12 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
     if not offences:
         offences = list(dict.fromkeys(m.lower() for m in _all(RE_OFFENCE, orig)))
 
-    # ── Physical evidence ─────────────────────────────────────────────────────
     weapons  = list(dict.fromkeys(m.lower() for m in _all(RE_WEAPON, t)))
     vehicles = list(dict.fromkeys(
         m.lower() for m in (_all(RE_VEHICLE, t) + _all(RE_VEHICLE, orig))
     ))
     plates   = list(dict.fromkeys(_all(RE_PLATE, t) + _all(RE_PLATE, orig)))
 
-    # ── Investigating Officer ─────────────────────────────────────────────────
     io_name       = _first(RE_IO_NAME, t) or _first(RE_IO_NAME, orig)
     io_rank_match = RE_IO_RANK.search(t) or RE_IO_RANK.search(orig)
     io_rank       = io_rank_match.group(1) if io_rank_match else None
@@ -584,7 +538,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
         io_name = io_rank_match.group(2).strip()
     belt_number = _first(RE_BELT_NUMBER, t) or _first(RE_BELT_NUMBER, orig)
 
-    # ── Hospital ──────────────────────────────────────────────────────────────
     hospital_match = RE_HOSPITAL.search(t) or RE_HOSPITAL.search(orig)
     hospital_ref   = None
     if hospital_match:
@@ -620,7 +573,6 @@ def extract_entities(text: str, original_text: str = "") -> Dict[str, Any]:
         {"field": "ner_locations", "extracted_value": extra_locations, "extraction_method": "spacy", "snippet": "", "confidence": "medium" if extra_locations else "none"},
     ])
 
-    # ── Completeness scoring ──────────────────────────────────────────────────
     filled = {
         "firNumber":       bool(fir_no),
         "complainantName": bool(complainant_name),

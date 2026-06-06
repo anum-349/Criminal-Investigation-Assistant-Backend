@@ -1,13 +1,4 @@
-"""
-services/llm_client.py
-─────────────────────────────────────────────────────────────────────────────
-Groq cloud inference backend. Same public interface as the Ollama version.
 
-Env vars:
-    GROQ_API_KEY   Required. Get from https://console.groq.com
-    GROQ_MODEL     Default: llama-3.1-8b-instant
-    GROQ_TIMEOUT   Generation timeout seconds. Default: 60
-"""
 from __future__ import annotations
 
 import json
@@ -24,23 +15,17 @@ log = logging.getLogger(__name__)
 
 load_dotenv()
 
-# ── Configuration ──────────────────────────────────────────────────────────
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_TIMEOUT = int(os.getenv("GROQ_TIMEOUT", "60"))
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# Keep these aliases so nothing else in your codebase breaks
 OLLAMA_MODEL   = GROQ_MODEL
 OLLAMA_TIMEOUT = GROQ_TIMEOUT
 OLLAMA_HOST    = "https://api.groq.com"
 
 _CONNECT_TIMEOUT = 10
-
-
-# ── Exceptions ─────────────────────────────────────────────────────────────
 
 class LLMError(Exception):
     """Base class for everything that can go wrong with the LLM call."""
@@ -54,18 +39,12 @@ class LLMTimeout(LLMError):
 class LLMBadResponse(LLMError):
     """Model returned something unparseable. Maps to HTTP 502."""
 
-
-# ── Result container ──────────────────────────────────────────────────────
-
 @dataclass
 class LLMResponse:
     text: str
     model: str
     duration_ms: int
-    eval_count: int      # completion tokens
-
-
-# ── Health check ──────────────────────────────────────────────────────────
+    eval_count: int     
 
 def is_available() -> bool:
     """Liveness probe — checks Groq is reachable and key is set."""
@@ -86,9 +65,6 @@ def is_available() -> bool:
 def model_is_pulled(model: str = GROQ_MODEL) -> bool:
     """Always True for Groq — no local download needed."""
     return True
-
-
-# ── Core generation ───────────────────────────────────────────────────────
 
 def generate(
     system_prompt: str,
@@ -120,7 +96,6 @@ def generate(
         "top_p":        0.9,
     }
 
-    # Groq supports native JSON mode — use it when requested
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
@@ -181,9 +156,6 @@ def generate(
         eval_count=usage.get("completion_tokens", 0),
     )
 
-
-# ── Streaming variant ──────────────────────────────────────────────────────
-
 def generate_stream(
     system_prompt: str,
     user_prompt: str,
@@ -214,9 +186,6 @@ def generate_stream(
         "top_p":       0.9,
         "stream":      True,
     }
-
-    # Note: json_object response_format is not supported with streaming on Groq
-    # The system prompt already instructs JSON-only output
 
     try:
         with requests.post(
@@ -250,9 +219,6 @@ def generate_stream(
         raise LLMTimeout(f"Groq stream exceeded {GROQ_TIMEOUT}s") from e
     except requests.RequestException as e:
         raise LLMError(f"Groq stream failed: {e}") from e
-
-
-# ── Smoke test ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

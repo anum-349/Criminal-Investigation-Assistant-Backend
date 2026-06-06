@@ -15,13 +15,13 @@ from models import (
     TimelineEvent, TimelineEventType,
     Activity,
 )
-from schemas.case_register_schema import (
+from schemas.cases.case_register_schema import (
     CaseRegisterRequest,
     CaseRegisterResponse,
     FIRFileUploadRequest,
     FIRFileUploadResult,
 )
-from schemas.case_detail_schema import TimelineEventOut
+from schemas.cases.case_detail_schema import TimelineEventOut
 from services import audit_service as audit
 from services.case_linker_hook import recompute_links_for_case
 from services.service_helper import (

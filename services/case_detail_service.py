@@ -22,9 +22,9 @@ from models import (
     Evidence, EvidenceType, Lead,
     TimelineEvent, TimelineEventType,
 )
-from schemas.case_suspect_schema import SuspectInput
+from schemas.persons.case_suspect_schema import SuspectInput
 from services import audit_service as audit
-from schemas.case_detail_schema import (
+from schemas.cases.case_detail_schema import (
     AddTimelineResult, CaseHeader, CaseStats, CaseDetailResponse, DeleteDraftResponse, DraftDetailResponse, DraftListResponse, DraftSummary, SaveDraftRequest,
     TimelineEventOut, AddTimelineResult,
     EvidenceInput, UpdateCaseStatusResponse, VictimInput, WitnessInput,
@@ -38,7 +38,10 @@ def _short_id(prefix: str, case_id: str, count: int) -> str:
     short_case_id = case_id.split("-")[-1]
     return f"{prefix}-{short_case_id}-{count + 1:02d}"
 
-def _next_event_id(case_id: str, count: int) -> str:    return _short_id("EVN", case_id, count)
+def _next_event_id(case_id: str, count: int = 0) -> str:
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    return f"EVT-{now_ms:X}-{secrets.token_hex(2).upper()}"
+
 def _next_suspect_id(case_id: str, count: int) -> str:  return _short_id("SUS", case_id, count)
 def _next_victim_id(case_id: str, count: int) -> str:   return _short_id("VIC", case_id, count)
 def _next_witness_id(case_id: str, count: int) -> str:  return _short_id("WIT", case_id, count)
@@ -130,6 +133,7 @@ def add_suspect(db: Session, *, user: User, case_id: str,
                 db.query(CaseSuspect)
                 .filter(CaseSuspect.case_id_fk == case.id)
                 .order_by(CaseSuspect.id.desc())
+                .with_for_update()  
                 .first()
             )
             last_num = 0
@@ -219,6 +223,7 @@ def add_evidence(
                 db.query(Evidence)
                 .filter(Evidence.case_id_fk == case.id)
                 .order_by(Evidence.id.desc())
+                .with_for_update() 
                 .first()
             )
 
@@ -330,12 +335,16 @@ def add_victim(
                     parsed_follow_up =date.fromisoformat(v.nextFollowUp)
                 except ValueError:
                     parsed_follow_up = None   # silently ignore malformed date
-                    latest = (
-                        db.query(CaseVictim)
-                        .filter(CaseVictim.case_id_fk == case.id)
-                        .order_by(CaseVictim.id.desc())
-                        .first()
-                    )
+            else:
+                parsed_follow_up = None
+
+            latest = (
+                db.query(CaseVictim)
+                .filter(CaseVictim.case_id_fk == case.id)
+                .order_by(CaseVictim.id.desc())
+                .with_for_update() 
+                .first()
+            )
 
             if latest:
                 last_num = int(latest.victim_id.split("-")[-1])
@@ -365,8 +374,7 @@ def add_victim(
                 injury_recorded_by  = v.injuryRecordedBy,
                 relation_to_suspect = v.relation,
                 medical_report      = bool(v.medicalReport)      if v.medicalReport      is not None else False,
-                postmortem          = bool(v.postmortem)         if v.postmortem         is not None else False,
-                protection_required = bool(v.protectionRequired) if v.protectionRequired is not None else False,
+                postmortem = bool(v.postmortemAutopsy) if v.postmortemAutopsy is not None else False,
                 cooperative         = bool(v.cooperative)        if v.cooperative        is not None else True,
             )
  
@@ -446,6 +454,7 @@ def add_witness(
                 db.query(CaseWitness)
                 .filter(CaseWitness.case_id_fk == case.id)
                 .order_by(CaseWitness.id.desc())
+                .with_for_update() 
                 .first()
             )
             last_num = 0
@@ -495,10 +504,10 @@ def add_witness(
     except HTTPException:
         db.rollback()
         raise
-    except Exception:
+    except Exception as ex:
         db.rollback()
-        log.exception("add_witness failed")
-        raise HTTPException(status_code=500, detail="Failed to add witness")
+        log.exception("Failed to add witness")  # logs full traceback
+        raise HTTPException(status_code=500, detail=f"Failed to add witness: {ex}")
 
     return AddTimelineResult(created_ids=created_ids, timeline_events=timeline_out)
 
@@ -740,8 +749,6 @@ def _check_not_same(case: Case, new_status_id: int, new_label: str) -> None:
             detail=f"Case is already in status '{new_label}'.",
         )
 
-
-# ── Public service function ──────────────────────────────────────────────────
 def update_case_status(
     db: Session,
     *,
@@ -927,10 +934,6 @@ def _detail_from_row(row: CaseDraft) -> DraftDetailResponse:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Public — save_draft
-# ──────────────────────────────────────────────────────────────────────────
-
 def save_draft(
     db: Session,
     *,
@@ -947,7 +950,6 @@ def save_draft(
     title = _derive_title(body)
     form_data = body.formData if isinstance(body.formData, dict) else {}
 
-    # ── Update path ─────────────────────────────────────────────────────
     if body.draftId:
         existing = (
             db.query(CaseDraft)
@@ -957,7 +959,6 @@ def save_draft(
         if existing:
             existing.title = title
             existing.form_data = form_data
-            # updated_at is auto-bumped via the onupdate handler in the model.
             try:
                 db.commit()
             except Exception:
@@ -966,13 +967,7 @@ def save_draft(
                 raise HTTPException(status_code=500, detail="Could not save draft")
             db.refresh(existing)
             return _detail_from_row(existing)
-        # else fall through to create — frontend passed a stale id (draft
-        # was deleted from another tab, etc.). Creating a new row is the
-        # least surprising behaviour.
-
-    # ── Create path ─────────────────────────────────────────────────────
-    # Retry once on the unique-constraint race. Two concurrent saves from
-    # the same user are very unlikely, but defensive code is cheap here.
+        
     last_err = None
     for _attempt in range(2):
         new_id = _next_draft_id(db)

@@ -12,14 +12,9 @@ import logging
 
 from services.realtime.ws_manager import publish as _ws_publish
 
-# ─── Transport swap: SSE → WebSocket ──────────────────────────────────────
-# Old: `from services.notification_events import publish as _publish_notification_event`
-# The new module exposes a `publish` function with the same shape; the only
-# difference is the events go over a WebSocket instead of an SSE stream.
 
 log = logging.getLogger(__name__)
 
-# ── Preference keys ────────────────────────────────────────────────────────
 PREF_KEYS = [
     "case_update_alerts",
     "ai_lead_notifications",
@@ -33,8 +28,6 @@ PREF_KEY_MAP = {
     "NEW_LEAD":      "ai_lead_notifications",
     "CASE_LINKED":   "case_link_alerts",
 }
-
-# ── helpers ────────────────────────────────────────────────────────────────
 
 def _notif_id() -> str:
     return f"NOTIF-{secrets.token_hex(6).upper()}"
@@ -85,8 +78,6 @@ def _row_to_dict(n: Notification) -> dict:
         "relatedCaseId": n.related_case_id,
     }
 
-
-# ── public API ─────────────────────────────────────────────────────────────
 
 def list_notifications(
     db: Session, *, user: User,
@@ -175,7 +166,6 @@ def get_preferences(db: Session, *, user: User) -> dict:
         UserPreference.pref_key.in_(PREF_KEYS),
     ).all()
 
-    # Build dict with DB values; default True for alerts, False for sound
     defaults = {
         "case_update_alerts":    False,
         "ai_lead_notifications": False,
@@ -209,7 +199,6 @@ def update_preferences(db: Session, *, user: User, prefs: dict) -> dict:
             ))
     db.commit()
     return get_preferences(db, user=user)
-# ── Push helper (call from other services) ────────────────────────────────
 
 def push(
     db: Session, *,
@@ -246,9 +235,7 @@ def push(
         created_at      = datetime.now(UTC),
     )
     db.add(n)
- 
-    # Capture into locals so the closure doesn't hold the Notification
-    # object (which becomes detached after commit on some configs).
+    
     event_payload = {
         "type":     type,
         "title":    title,
@@ -259,7 +246,6 @@ def push(
     def _on_commit(session):
         """Fires once the txn commits successfully."""
         try:
-            # Note: _ws_publish takes (user_id, event) as positional args.
             sent = _ws_publish(target_user_id, event_payload)
             log.info("WS publish for user_id=%s type=%s reached %d connection(s)",
                      target_user_id, event_payload["type"], sent)

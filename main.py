@@ -9,7 +9,23 @@ from fastapi.staticfiles import StaticFiles
 
 from db import Base, engine
 from fir_api.pipeline.model_loader import warmup
-from routes import analytics_routes, case_links_generate, case_routes, drafts_routes, fir_route, investigator_route, leads_ai_routes, lookup_routes, main_route, notification_routes, notifications_ws, report_routes, ticket_routes, user_route
+from routes import (
+    main_route,
+    cases_router,
+    case_links_router,
+    drafts_router,
+    fir_router,
+    lookup_router,
+    leads_router,
+    admin_router,
+    tickets_router,
+    reports_router,
+    analytics_router,
+    notifications_ws_router,
+    notifications_router,
+    auth_router,
+    investigator_router,
+)
 
 load_dotenv()
 
@@ -67,20 +83,42 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],   # for file downloads
 )
 
-app.include_router(notifications_ws.router, prefix="/api/notifications", tags=["notifications"])
-app.include_router(user_route.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(main_route.router, prefix="/api",      tags=["Dashboard"])
-app.include_router(investigator_route.router, prefix="/api",      tags=["Investigator Dashboard"])
-app.include_router(ticket_routes.router, prefix="/api/tickets", tags=["Tickets"])
-app.include_router(report_routes.router, prefix="/api/reports", tags=["Reports"])
-app.include_router(analytics_routes.router, prefix="/api/analytics", tags=["Analytics"])
-app.include_router(notification_routes.router, prefix="/api/notifications", tags=["Notifications"])
-app.include_router(drafts_routes.router, prefix="/api/investigator/cases/case-drafts", tags=["CaseDrafts"])
-app.include_router(lookup_routes.router, prefix="/api/investigator/lookups",      tags=["Lookups"])
-app.include_router(fir_route.router, prefix="/api", tags=["FIR Processing"])
-app.include_router(leads_ai_routes.router, prefix="/api/investigator/cases", tags=["AI Leads"])
-app.include_router(case_links_generate.router, prefix="/api/investigator/cases", tags=["case-links"])
-app.include_router(case_routes.router, prefix="/api/investigator/cases",      tags=["Cases"])
+# ─────────────────────────────────────────────────────────────────────────────
+# Route Registration (organized by domain)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Auth & Account
+app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(investigator_router, prefix="/api", tags=["Investigator Dashboard"])
+
+# Main Dashboard & Health
+app.include_router(main_route.router, prefix="/api", tags=["Dashboard"])
+
+# Cases (registration, detail, drafts, links)
+app.include_router(cases_router, prefix="/api/investigator/cases", tags=["Cases"])
+app.include_router(drafts_router, prefix="/api/investigator/cases/case-drafts", tags=["Case Drafts"])
+app.include_router(case_links_router, prefix="/api/investigator/cases", tags=["Case Links"])
+
+# Investigations (FIR processing, lookups)
+app.include_router(fir_router, prefix="/api", tags=["FIR Processing"])
+app.include_router(lookup_router, prefix="/api/investigator/lookups", tags=["Lookups"])
+
+# AI Leads
+app.include_router(leads_router, prefix="/api/investigator/cases", tags=["AI Leads"])
+
+# Notifications (WebSocket + REST)
+app.include_router(notifications_ws_router, prefix="/api/notifications", tags=["Notifications"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["Notifications"])
+
+# Admin (users, tickets, reports, analytics)
+app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+app.include_router(tickets_router, prefix="/api/tickets", tags=["Tickets"])
+app.include_router(reports_router, prefix="/api/reports", tags=["Reports"])
+app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Meta Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", tags=["Meta"])
 def root():

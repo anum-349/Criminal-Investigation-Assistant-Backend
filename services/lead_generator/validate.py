@@ -1,29 +1,3 @@
-"""
-services/lead_generator/validate.py
-─────────────────────────────────────────────────────────────────────────────
-Phase 3b (v2): the validation gate. Same job as v1 — drop any lead that
-cites an identifier the model invented — but expanded to cover every
-new citation type the v2 prompt allows the LLM to use:
-
-    cited_cnics         (Pakistani CNIC format, must be in context)
-    cited_case_ids      (focal case + linked cases + nearby cases)
-    cited_suspect_ids   (SUS-/S-/SUSP- prefix, must exist on this case)
-    cited_victim_ids    (VIC-/V- prefix, must exist on this case)
-    cited_witness_ids   (WIT-/W- prefix, must exist on this case)
-    cited_evidence_ids  (EVD-/E- prefix, must exist on this case)
-    cited_finding_ids   (FF- prefix; synthetic IDs from context.py)
-    cited_note_ids      (NOTE- prefix; investigator-authored notes)
-
-Plus a few v2-only sanity checks:
-    • addresses_gap field, if set, must match a real gap code from context
-    • description must reference at least one of the cited identifiers
-      verbatim (anti-"generic lead" check)
-    • next_step must contain an action verb (anti-vague-advice check)
-
-Everything else (type allow-list, severity allow-list, confidence range,
-description length, prose minimums, hard vs soft issues, lenient mode)
-works exactly like v1.
-"""
 from __future__ import annotations
 
 import json
@@ -37,11 +11,6 @@ from services.lead_generator.prompt import ALLOWED_LEAD_TYPES, ALLOWED_SEVERITIE
 
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Identifier formats (defensive — the validator also checks SET membership
-# after the format pass, so even a well-formed-but-invented ID is dropped)
-# ─────────────────────────────────────────────────────────────────────────────
-
 _CNIC_RE       = re.compile(r"^\d{5}-\d{7}-\d{1}$")
 _CASE_ID_RE = re.compile(r"^(C-\d+|CASE-\d{4}-\d+)$", re.IGNORECASE)
 _SUSPECT_ID_RE = re.compile(r"^(SUS|S|SUSP)-[A-Za-z0-9\-]+$",   re.IGNORECASE)
@@ -51,9 +20,6 @@ _EVIDENCE_ID_RE= re.compile(r"^(EVD|E|EV)-[A-Za-z0-9\-]+$",     re.IGNORECASE)
 _FINDING_ID_RE = re.compile(r"^FF-[A-Za-z0-9\-]+$",             re.IGNORECASE)
 _NOTE_ID_RE    = re.compile(r"^NOTE-[A-Za-z0-9\-]+$",           re.IGNORECASE)
 
-# Common imperative verbs the LLM should use in next_step. We don't
-# require a specific verb — just SOME action-orientedness, which we
-# detect with a permissive regex of strong action verbs.
 _ACTION_VERBS = re.compile(
     r"\b(re-?interview|interview|investigate|verify|confirm|recover|"
     r"obtain|collect|cross[- ]?reference|review|escalate|request|"
@@ -85,11 +51,6 @@ class BatchValidationReport:
     @property
     def total(self) -> int:
         return len(self.accepted) + len(self.rejected)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-lead validation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _check_citation_list(
     *,
@@ -125,7 +86,6 @@ def _check_citation_list(
         if check_value not in seen_set and normalised not in seen_set:
             issues.append(f"Hallucinated {seen_set_label}: '{normalised}'")
             continue
-        # Use the canonical form from the seen set when available
         cleaned.append(
             check_value if check_value in seen_set else normalised
         )
@@ -294,9 +254,6 @@ def validate_lead(
     if basis and len(basis) < 8:
         issues.append(f"evidence_basis too short: '{basis}'")
     # ── 8. Anti-generic check ────────────────────────────────────
-    # A lead that cites nothing AND mentions no identifier verbatim in
-    # the description is almost certainly the "interview the witness"
-    # kind of advice that's useless without context.
     any_citations = any(
         lead.get(k) for k in (
             "cited_cnics", "cited_case_ids", "cited_suspect_ids",
@@ -328,11 +285,6 @@ def validate_lead(
         issues=issues,
         lead=lead if passed else None,
     )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Batch validation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def validate_batch(
     leads: List[Dict[str, Any]],
@@ -368,11 +320,6 @@ def validate_batch(
             report.total, ctx.case_id,
         )
     return report
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Raw response parsing
-# ─────────────────────────────────────────────────────────────────────────────
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE | re.IGNORECASE)
 

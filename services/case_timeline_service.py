@@ -14,7 +14,7 @@ from models import (
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
-from schemas.case_timeline_schema import (
+from schemas.common.case_timeline_schema import (
     TimelineEventRow, TimelineCounts, CaseTimelineList,
     AddTimelineEventRequest, DeleteTimelineEventResult,
 )

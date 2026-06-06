@@ -15,7 +15,7 @@ from models import (
     Location, City,
 )
 from services import audit_service as audit
-from schemas.search_schema import (
+from schemas.common.search_schema import (
     CaseSearchRow, SuspectSearchRow, VictimSearchRow,
     WitnessSearchRow, LeadSearchRow, LocationSearchRow,
     SearchCounts, SearchResponse,

@@ -1,52 +1,3 @@
-"""
-services/lead_generator/context.py
-─────────────────────────────────────────────────────────────────────────────
-Phase 2 (comprehensive): pull every aspect of a case that a real
-investigator would weigh when deciding the next step, plus a flat index
-of every identifier so the validator can reject hallucinations.
-
-What "comprehensive" means in this file:
-  Every section below corresponds to a question an experienced
-  investigator would ask. The LLM never sees raw rows — only the
-  pre-digested signal — so the prompt stays compact while still
-  surfacing the gap, the contradiction, or the opportunity.
-
-Sections (in the order the prompt sees them):
-
-  A. CORE             — case header, crime-type subtype, location lat/lng
-  B. PEOPLE           — suspects (with alibi + status + days detained),
-                        victims (with status + follow-up + threat level),
-                        witnesses (with credibility + protection flags)
-  C. STATEMENTS       — every statement in one block so the LLM can
-                        cross-reference (alibi vs witness account vs
-                        victim account)
-  D. FORENSIC         — VictimForensicFinding rows + evidence-analysis
-                        status (analyzed vs pending) + counts by type
-  E. EVIDENCE GAPS    — derived: "CCTV flagged but no CCTV evidence",
-                        "witnesses available flag set but no witness rows",
-                        "deceased victim but no postmortem flag", etc.
-  F. ENTITIES         — FIR-extracted entities (PERSON / VEHICLE / etc.)
-                        and which ones are NOT in the structured records
-  G. LINKED CASES     — top 5 by similarity, with shared-entity reasons
-  H. NEARBY INCIDENTS — Haversine pass within N km × M days (real spatial
-                        density, not invented numbers)
-  I. TIMELINE         — last 15 events
-  J. STALENESS        — derived: days since incident, days since last
-                        timeline activity, days case has been open
-  K. NOTES            — investigator's own hypotheses/observations (the
-                        LLM can echo or extend them but can't override
-                        the investigator's voice)
-  L. COMPLETENESS     — missing-field and inconsistency rows from the
-                        completeness engine
-
-Validation indices built alongside:
-  all_cnics_seen, all_case_ids_seen, all_suspect_ids, all_victim_ids,
-  all_witness_ids, all_evidence_ids, all_note_ids, linked_case_ids,
-  all_finding_ids
-
-Anything the LLM cites must be in one of these sets — otherwise
-validate.py drops the lead.
-"""
 from __future__ import annotations
 
 import logging
@@ -70,43 +21,22 @@ from services.service_helper import _resolve_case
 
 log = logging.getLogger(__name__)
 
-# ── Tunables ──────────────────────────────────────────────────────────────
-
-# Cap linked cases at 5 — beyond that the prompt bloats and the LLM
-# starts mixing them up.
 MAX_LINKED_CASES = 5
 
-# Recent timeline window. We feed the LLM the most recent N events; older
-# history goes into derived counters (e.g. days_since_last_activity).
 MAX_TIMELINE_EVENTS = 15
 
-# Spatial density default — same numbers used by case_location_service so
-# leads stay consistent with what the Location tab shows.
 SPATIAL_RADIUS_KM = 3.0
 SPATIAL_RECENT_DAYS = 30
 SPATIAL_MAX_RESULTS = 20
 
-# How recent must a timeline event be before we *don't* call the case stale.
 STALE_THRESHOLD_DAYS = 14
 
-# Maximum number of FIR-extracted entities to feed in. Most cases have
-# fewer than this; the cap is for the few that have hundreds.
 MAX_ENTITIES = 25
 
-# Maximum number of investigator notes to include. Latest first.
 MAX_NOTES = 10
 
-# Pakistan's legal limit for detention without charge: 24 hours plus the
-# magistrate-authorised remand. We flag suspects "Detained" for more than
-# this. Tuneable via env if needed.
 DETENTION_FLAG_DAYS = 15
 EARTH_RADIUS_KM = 6371.0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# A. CORE — case header value objects
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 @dataclass
 class SuspectCtx:
@@ -141,10 +71,6 @@ class SuspectCtx:
     days_since_added: Optional[int]
     days_detained: Optional[int]            # only set when detained
     flags: List[str] = field(default_factory=list)
-    # ↑ flags are derived booleans rolled into one list — e.g.
-    #   ["NO_ALIBI", "CRIMINAL_RECORD_NOT_ARRESTED", "DETAINED_BEYOND_LIMIT"]
-    #   The prompt renders these as bullet hints under each suspect.
-
 
 @dataclass
 class VictimCtx:
@@ -254,10 +180,6 @@ class LinkedCaseCtx:
     explanation: Optional[str]
     investigator_name: str
     shared_suspect_cnics: List[str] = field(default_factory=list)
-    # ↑ if the linker says SAME_SUSPECT and the suspect is also on this
-    # case, we surface that explicitly so the LLM can suggest a
-    # cross-case interview.
-
 
 @dataclass
 class NearbyIncidentCtx:
@@ -345,11 +267,6 @@ class GapCtx:
     code: str
     human: str
     refs: List[str] = field(default_factory=list)    # related identifier(s) — sus/vic/wit/case/evd
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# The full snapshot
-# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class CaseContext:
@@ -460,11 +377,6 @@ class CaseContext:
     all_note_ids:      Set[str] = field(default_factory=set)
     linked_case_ids:   Set[str] = field(default_factory=set)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _days_between(earlier: Optional[date], later: Optional[date] = None) -> Optional[int]:
     """Whole days between two dates. `later` defaults to today.
     Returns None if `earlier` is missing — never crashes."""
@@ -506,11 +418,6 @@ def _has_meaningful_text(s: Optional[str], min_chars: int = 5) -> bool:
         return False
     cleaned = s.strip().strip("-.").strip()
     return len(cleaned) >= min_chars
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Builder
-# ─────────────────────────────────────────────────────────────────────────────
 
 def build_case_context(
     db: Session,
@@ -644,9 +551,6 @@ def build_case_context(
         has_alibi = _has_meaningful_text(s.alibi)
         status_label = s.status.label if s.status else None
 
-        # Detention duration heuristic — if currently detained, count
-        # from created_at (when the case_suspect row was written, which
-        # is when the suspect was first added to the case).
         days_detained: Optional[int] = None
         if status_label and "detain" in status_label.lower():
             days_detained = _days_between(
@@ -689,8 +593,6 @@ def build_case_context(
         if cnic:
             ctx.all_cnics_seen.add(cnic)
 
-        # Statement: suspect alibi is the only first-person statement we
-        # have from the suspect side. Surface it for cross-reference.
         if has_alibi:
             ctx.statements.append(StatementCtx(
                 source_kind = "SUSPECT_ALIBI",
@@ -699,7 +601,6 @@ def build_case_context(
                 text        = s.alibi.strip(),
             ))
 
-    # ── B. VICTIMS ─────────────────────────────────────────────────
     deceased_victim_present = False
     for v in (full.victims or []):
         vic_id = v.victim_id or f"VIC-{full.case_id}-{v.id:02d}"
@@ -713,7 +614,6 @@ def build_case_context(
         if (status_label or "").lower() in ("deceased", "dead"):
             if not bool(v.postmortem):
                 flags.append("DECEASED_NO_POSTMORTEM")
-            # Murder cases should have MurderDetails populated
             if not full.murder_details and (full.case_type and "murder" not in full.case_type.label.lower()):
                 flags.append("DECEASED_NO_MURDER_DETAILS")
 
@@ -763,7 +663,6 @@ def build_case_context(
                 text        = vctx.statement,
             ))
 
-        # Forensic findings (free-text rows on victim_forensic_findings)
         for idx, ff in enumerate(v.forensic_findings or [], start=1):
             finding_id = f"FF-{vic_id}-{idx:02d}"
             ctx.forensic_findings.append(ForensicFindingCtx(
@@ -931,11 +830,9 @@ def build_case_context(
         ctx.linked_case_ids.add(other.case_id)
         ctx.all_case_ids_seen.add(other.case_id)
 
-    # ── H. NEARBY INCIDENTS (Haversine, real density) ──────────────
     if ctx.latitude and ctx.longitude:
         lat_min, lat_max, lng_min, lng_max = _bbox(ctx.latitude, ctx.longitude, SPATIAL_RADIUS_KM)
         cutoff_date = date.today() - timedelta(days=SPATIAL_RECENT_DAYS)
-        # bbox is a cheap pre-filter; haversine refines below
         nearby_q = (
             db.query(Case)
             .join(Location, Location.case_id_fk == Case.id)
@@ -1064,9 +961,6 @@ def build_case_context(
         )
 
     # ── E. DERIVED GAPS (the lead generator's secret sauce) ────────
-    # These are inconsistencies a real investigator would spot at a
-    # glance. Surfacing them in the prompt means the LLM doesn't need to
-    # re-derive them — it just writes the lead.
     ctx.gaps = _compute_gaps(
         ctx           = ctx,
         cctv_present  = cctv_evidence_present,
@@ -1086,18 +980,12 @@ def build_case_context(
         .all()
     )
     ctx.existing_leads = [
-        # Strip the provenance footer — only keep the first sentence
         row.description.split("\n")[0].strip()
         for row in existing
         if row.description
     ]
 
     return ctx
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Gap derivation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_gaps(
     *,
@@ -1347,10 +1235,6 @@ def _compute_gaps(
 
     return gaps
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Depth check
-# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class ContextDepthReport:

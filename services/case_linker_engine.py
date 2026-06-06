@@ -1,67 +1,3 @@
-# services/case_linker_engine.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Case Linker Engine — v6 (investigator-grade explanations + SBERT semantic dim)
-#
-# v6 = v3 (deterministic 8-dim feature engine) + SBERT 9th dim (in-process).
-# Single self-contained file — no patches to apply.
-#
-# WHAT'S NEW vs v2
-# ────────────────
-# Explanations now read like an investigator's note:
-#
-#   Headline (≤120 chars, goes in the table):
-#     "Bilal Hussain (CNIC 35201-1234567-1) appears in both cases.
-#      Same weapon (9mm pistol) and matching MO (financial motive)."
-#
-#   Detail (multi-section, surfaced in the row's expandable drawer):
-#     # SHARED SUSPECTS (1)
-#     • Bilal Hussain — CNIC 35201-1234567-1, age 34, known affiliations:
-#       "Anjuman gang". Has prior criminal record. Same escape vehicle
-#       on both cases: white Toyota Corolla.
-#
-#     # WEAPON
-#     • Both incidents involved a 9mm pistol.
-#
-#     # MODUS OPERANDI
-#     • Both narratives mention "armed robbery during business hours";
-#       motive recorded as "financial" on both cases.
-#
-#     # LOCATION
-#     • Same city (Karachi); incidents 1.4 km apart (Saddar police
-#       station ↔ Aram Bagh police station).
-#
-#     # TIMING
-#     • 11 days apart (C-2040: 2025-09-12 → C-2053: 2025-09-23).
-#
-#     # CRIME TYPE
-#     • Both classified as "Armed Robbery".
-#
-#     # EVIDENCE
-#     • Both cases have firearm-related evidence on file.
-#
-# Eight scoring dimensions, all read real columns on real models:
-#     1. Suspects     (person_id / CNIC / normalised name)
-#     2. Victims      (person_id / CNIC / normalised name)
-#     3. Weapon       (exact lookup match + soft category match)
-#     4. Location     (city → police_station → area → GPS Haversine)
-#     5. Temporal     (days-apart decay, time-of-day pattern)
-#     6. MO           (cause_of_death + motive + modus_operandi narrative)
-#     7. Crime type   (same CaseType, or related family)
-#     8. Evidence     (overlapping evidence types)
-#
-# OUTPUT CONTRACT
-# ───────────────
-# LinkProposal.headline      ← short, table-friendly
-# LinkProposal.detail        ← markdown-style multi-section block
-# LinkProposal.explanation   ← keeps backwards compat (same as detail)
-# LinkProposal.confidence    ← 0.0–1.0 (the row's similarity_score)
-# LinkProposal.shared_entities ← unchanged, still feeds case_link_shared_entities
-#
-# The CaseLink table only has `explanation` (Text). We pack BOTH headline
-# and detail into it, separated by a `\n\n---\n\n` marker. The frontend
-# splits on that marker to render the two tiers. No schema change needed.
-# ─────────────────────────────────────────────────────────────────────────────
-
 from __future__ import annotations
 
 import logging
@@ -83,17 +19,11 @@ from models import (
     Person,
 )
 
-# SBERT semantic similarity service (in-process; merged from v4 PATCH).
-# When the embedder isn't loaded, all calls return None/0.0 and the
-# narrative_semantic dimension simply doesn't fire — every other
-# dimension still works.
+
 from services import semantic_similarity as semsim
 
 log = logging.getLogger(__name__)
 
-# ════════════════════════════════════════════════════════════════════════════
-# Tunables
-# ════════════════════════════════════════════════════════════════════════════
 WEIGHTS: Dict[str, float] = {
     # v6: rebalanced to make room for narrative_semantic. The relative
     # ranking of dimensions is unchanged — shared_suspect still
@@ -113,7 +43,7 @@ WEIGHTS: Dict[str, float] = {
 LINK_TYPE_CODES = {
     "shared_suspect":     "SUSPECT_MATCH",
     "shared_victim":      "VICTIM_MATCH",
-    "narrative_semantic": "NARRATIVE_MATCH",  # NEW in v6
+    "narrative_semantic": "NARRATIVE_MATCH",  
     "same_weapon":        "WEAPON_MATCH",
     "same_location":      "LOCATION_MATCH",
     "same_mo":            "MODUS_MATCH",
@@ -122,11 +52,10 @@ LINK_TYPE_CODES = {
     "temporal_close":     "TEMPORAL",
 }
 
-# Used by case_linker_hook for the notification body.
 LINK_TYPE_HUMAN = {
     "SUSPECT_MATCH":    "shared suspect",
     "VICTIM_MATCH":     "shared victim",
-    "NARRATIVE_MATCH":  "matching narrative pattern",  # NEW in v6
+    "NARRATIVE_MATCH":  "matching narrative pattern",  
     "WEAPON_MATCH":     "matching weapon",
     "LOCATION_MATCH":   "shared location",
     "MODUS_MATCH":      "matching modus operandi",
@@ -139,9 +68,6 @@ LINK_TYPE_HUMAN = {
 MIN_PERSIST_SCORE = 0.30
 HIGH_CONFIDENCE_THRESHOLD = 0.75
 
-# SBERT cosine thresholds for the narrative_semantic dimension.
-# Tuned for paraphrase-multilingual-MiniLM-L12-v2 on short FIR narratives.
-# Below SEM_FLOOR is noise; above SEM_STRONG is treated as full signal.
 SEM_FLOOR  = 0.55
 SEM_STRONG = 0.85
 
@@ -152,8 +78,6 @@ TIME_OF_DAY_WINDOW_HOURS = 2  # incidents within 2 hours of each other count
 SPATIAL_SAME_STATION_BONUS = 0.4
 SPATIAL_GPS_THRESHOLD_KM = 2.0
 
-# Weapon category families — used when exact label differs but both fall
-# in the same family. Extend as new weapon labels are seeded.
 WEAPON_FAMILIES: Dict[str, List[str]] = {
     "firearm": ["pistol", "revolver", "handgun", "9mm", "shotgun", "rifle", "gun", "firearm", "ak-47", "tt pistol"],
     "blade":   ["knife", "dagger", "blade", "sword", "machete", "kitchen knife"],
@@ -172,10 +96,6 @@ CRIME_TYPE_FAMILIES: Dict[str, List[str]] = {
     "sexual":    ["rape", "sexual assault", "harassment"],
 }
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ════════════════════════════════════════════════════════════════════════════
 _WS_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"\b[a-z0-9]+\b")
 _STOPWORDS = {
@@ -267,10 +187,6 @@ def _truncate(s: str, n: int) -> str:
     s = s.strip()
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Feature container — everything the linker reads about one case
-# ════════════════════════════════════════════════════════════════════════════
 @dataclass
 class PersonInfo:
     """Snapshot of a Person + their CaseSuspect/CaseVictim role row, used
@@ -323,9 +239,6 @@ class CaseFeatures:
     evidence_types: Set[str] = field(default_factory=set)
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Feature extraction
-# ════════════════════════════════════════════════════════════════════════════
 def _person_info_from_suspect(s: CaseSuspect) -> Optional[PersonInfo]:
     p = s.person
     if not p:
@@ -424,10 +337,6 @@ def _build_features(db: Session, case: Case) -> CaseFeatures:
     return f
 
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Pairwise scoring — each dimension returns (score, headline_phrase, detail_lines)
-# ════════════════════════════════════════════════════════════════════════════
 @dataclass
 class DimensionResult:
     """One scored dimension. Score is 0.0–1.0; headline_phrase is short
@@ -443,19 +352,14 @@ def _dim_suspects(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
     if not shared_keys:
         return DimensionResult()
 
-    # Score: 1.0 for any overlap. Multiple shared suspects is already maximal
-    # evidence; we don't need a fancier scale here.
     score = 1.0
     bullets: List[str] = []
     shared: List[Tuple[str, str, Optional[int]]] = []
 
     for k in sorted(shared_keys):
-        # Take the richer of the two records (the one with more populated
-        # fields) for the explanation. Both should refer to the same Person,
-        # but suspect-role columns like criminal_record may differ per case.
         ia = a.suspects[k]
         ib = b.suspects[k]
-        # Build a per-suspect description string.
+
         parts: List[str] = []
         name = ia.full_name or ib.full_name or "Unnamed"
         if ia.cnic or ib.cnic:
@@ -463,14 +367,14 @@ def _dim_suspects(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
         age = ia.age or ib.age
         if age:
             parts.append(f"age {age}")
-        # Affiliations: take from either case
+
         affil = ia.known_affiliations or ib.known_affiliations
         if affil:
             parts.append(f"affiliated with \"{affil.strip()}\"")
-        # Criminal record: TRUE on either case is notable
+
         if ia.criminal_record or ib.criminal_record:
             parts.append("has prior criminal record")
-        # Vehicle: compare across both cases — same vehicle is a strong cue
+
         va, vb = ia.vehicle_description, ib.vehicle_description
         if va and vb and _norm(va) == _norm(vb):
             parts.append(f"same escape vehicle on both cases ({va.strip()})")
@@ -478,7 +382,7 @@ def _dim_suspects(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
             parts.append(f"escape vehicle differs ({va.strip()} vs {vb.strip()})")
         elif va or vb:
             parts.append(f"vehicle on file ({(va or vb).strip()})")
-        # Relation to case
+
         rel_a, rel_b = ia.relation_to_case, ib.relation_to_case
         if rel_a and rel_b and rel_a == rel_b:
             parts.append(f"recorded as \"{rel_a}\" in both")
@@ -489,9 +393,6 @@ def _dim_suspects(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
         bullets.append(bullet)
         shared.append(("SUSPECT", name, ia.person_id))
 
-    # Headline phrase — name the suspect inline ("Bilal Hussain (CNIC …)
-    # appears in both cases"). If multiple, pick the most-identifiable
-    # one (one with CNIC > one with name only) and append count.
     primary = sorted(
         (a.suspects[k] for k in shared_keys),
         key=lambda i: (0 if i.cnic else 1, i.full_name or ""),
@@ -803,10 +704,6 @@ def _dim_evidence(a: CaseFeatures, b: CaseFeatures) -> DimensionResult:
         detail_section=("EVIDENCE", bullets),
     )
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# v6 NEW — Dimension 9: narrative semantic similarity (SBERT)
-# ════════════════════════════════════════════════════════════════════════════
 def _dim_narrative_semantic(
     db: Session,
     a: "CaseFeatures", b: "CaseFeatures",
@@ -857,10 +754,6 @@ def _dim_narrative_semantic(
         detail_section=("NARRATIVE (SEMANTIC)", bullets),
     )
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Pair scoring: bundle all dimensions
-# ════════════════════════════════════════════════════════════════════════════
 @dataclass
 class EdgeScore:
     dimensions: Dict[str, DimensionResult]
@@ -922,10 +815,6 @@ def _score_pair(
     dims = {k: v for k, v in raw.items() if v.score > 0}
     return EdgeScore(dimensions=dims)
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Explanation builder — two-tier output (headline + detail)
-# ════════════════════════════════════════════════════════════════════════════
 DETAIL_MARKER = "\n\n---DETAIL---\n\n"
 
 
@@ -985,9 +874,6 @@ def _build_detail(edge: EdgeScore, a: CaseFeatures, b: CaseFeatures) -> str:
     return "\n\n".join(sections)
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Public API
-# ════════════════════════════════════════════════════════════════════════════
 @dataclass
 class LinkProposal:
     source_case_id: int
@@ -1150,9 +1036,7 @@ def compute_case_graph_metrics(db: Session) -> Dict[str, dict]:
     G = nx.Graph()
     for f in features:
         G.add_node(f.case_id_internal, external=f.case_id_external)
-    # v6: pre-warm embeddings so the O(N²) scoring loop below doesn't
-    # encode each case N times. Skipping if SBERT not loaded is safe —
-    # semantic_score falls through to 0 on missing vectors.
+        
     for c in cases:
         semsim.get_embedding(db, c)
 

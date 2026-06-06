@@ -13,9 +13,9 @@ from models import (
     Severity, Activity,
     TimelineEvent, TimelineEventType,
 )
-from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
+from schemas.common.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
 from services import audit_service as audit
-from schemas.case_suspect_schema import (
+from schemas.persons.case_suspect_schema import (
     SuspectRow, CaseSuspectsList, UpdateSuspectRequest,
 )
 from services.service_helper import UPLOADS_ROOT, _decode_data_url, _ext_for_mime, _format_officer_name, _public_url, _resolve_case

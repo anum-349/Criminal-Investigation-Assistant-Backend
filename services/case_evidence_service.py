@@ -16,7 +16,7 @@ from models import (
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
-from schemas.case_evidence_schema import (
+from schemas.common.case_evidence_schema import (
     CaseEvidenceRow, CaseEvidenceList, EvidencePhotoOut,
     UpdateEvidenceRequest, PhotoUploadRequest,
     PhotoUploadResult, PhotoDeleteResult,
@@ -120,7 +120,7 @@ def _log_evidence_action(
     now = datetime.now(UTC)
     db.add(TimelineEvent(
         case_id_fk=case.id,
-        event_id=f"EVT-{int(now.timestamp() * 1000):X}-{secrets.token_hex(2).upper()}",
+        event_id = f"EVT-{int(now.timestamp() * 1000):X}-{secrets.token_hex(2).upper()}",
         event_source="SYSTEM",
         event_type_id=_timeline_event_type_id(db, "EVIDENCE_ADDED"),
         title=title,

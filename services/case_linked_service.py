@@ -9,8 +9,9 @@ from models import (
     Case, CaseStatus,
     CaseLink,
 )
+
 from services import audit_service as audit
-from schemas.case_linked_schema import (
+from schemas.common.case_linked_schema import (
     LinkedCaseRow,
     LinkedRelationOption,
     LinkedStatusOption,

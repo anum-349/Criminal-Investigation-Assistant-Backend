@@ -1,16 +1,13 @@
-# Keep the main backend image small and clean.
-
-# Python noise
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# Local environments
 .venv/
 venv/
 env/
@@ -18,35 +15,51 @@ env/
 .env.*
 !.env.example
 
-# IDE / editor
 .idea/
 .vscode/
 *.swp
+*.swo
 
-# Git
 .git/
 .gitignore
+.github/
 
-# OS
+# ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# ─── Project-specific ─────────────────────────────────────────────────────────
-# Don't ship the AI service inside the main backend image — it has its own
-# Dockerfile and image. Keeping it out also saves ~3 GB.
-fir-api/
-
-# Don't bake uploaded files / local DBs into the image — they're volume-mounted.
+# ─── Volume-mounted at runtime — never bake into image ────────────────────────
 uploads/
 sqlite_data/
+backups/
 
-# Don't ship tests in the production image (saves a few MB and stops accidental
-# test runs in prod).
+# ─── Tests & seeds — not needed in production ────────────────────────────────
 tests/
+seeds/
+test_*.py
+*_test.py
+conftest.py
 
-# Seed scripts are one-shot tools — keep them in the repo but not the image.
+# ─── SQLite dev DB ────────────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
 
-
-# Docs
+# ─── Docs (except README) ─────────────────────────────────────────────────────
 *.md
 !README.md
+docs/
+README_*.md
+
+# ─── Temporary & build artifacts ──────────────────────────────────────────────
+*.tmp
+*.log
+*.egg-info/
+build/
+dist/
+*.egg
+
+# ─── Node (if any frontend in repo) ──────────────────────────────────────────
+node_modules/
+package-lock.json
+yarn.lock

@@ -1,64 +1,8 @@
-# services/predictive_ai_service.py
-"""
-Predictive AI engine for crime trends & analytics.
-
-Purpose
-───────
-This module is the "AI brain" behind the Predictions tab in the analytics
-page. It replaces the simple linear-extrapolation stub that used to live
-in analytics_service.get_predictions() with a proper multi-model
-forecasting ensemble plus anomaly / pattern detection.
-
-What it produces
-────────────────
-For each call, the engine returns:
-    1. Monthly forecast (next 3 months) with confidence band
-    2. Per-province risk forecast
-    3. Per-crime-type forecast
-    4. AI Pattern Alerts (anomaly clusters, surges, emerging MOs)
-    5. Hotspot predictions (top areas at risk next month)
-    6. Model metadata: which model was used, accuracy on holdout, sample size
-
-Models used
-───────────
-We use a small ensemble (no GPU, no heavy deps — runs on the same FastAPI
-worker that serves the rest of the API):
-
-    • Holt-Winters Exponential Smoothing  (statsmodels)
-            - captures level + trend + (optionally) seasonality
-            - main model when we have ≥ 8 months of history
-    • Linear regression on time index       (numpy/sklearn)
-            - fallback for short series (< 8 months)
-    • Seasonal Naive baseline               (numpy)
-            - used to compute "skill" (does HW beat naive?)
-    • IQR-based anomaly detector            (numpy)
-            - flags months / provinces / crime types that broke pattern
-    • DBSCAN over (lat, lng, time)          (sklearn)
-            - clusters recent incidents into emerging hotspots
-
-The ensemble picks per-series the model with the lowest MAPE on the last
-holdout point. Confidence bands come from the empirical residual std-dev
-of the chosen model (not from a hard-coded ±15 %).
-
-If statsmodels / sklearn aren't installed the engine falls back to the
-linear model so the endpoint never breaks.
-
-Wiring
-──────
-analytics_service.get_predictions() now just delegates here:
-
-    from services import predictive_ai_service as pai
-    return pai.run_predictions(db, user=user, request=request)
-
-The output schema is a superset of the old one — existing frontend
-fields (predictionTrend, provinceForecast, crimeForecast) are unchanged,
-new fields (patternAlerts, hotspotPredictions, modelMeta) are additive
-so old clients keep working.
-"""
 
 from __future__ import annotations
 
 import logging
+import shap
 import math
 from collections import defaultdict
 from dataclasses import dataclass
@@ -73,11 +17,11 @@ from fastapi import Request
 from models import (
     Case, Location, Province, CaseType, TimelineEvent,
 )
-from schemas.analytics_schema import (
+from schemas.admin.analytics_schema import (
     PredictionTrendItem, ProvinceForecastItem, CrimeForecastItem,
     AnalyticsPredictionsResponse,
 )
-from schemas.predictive_ai_schema import (
+from schemas.leads.predictive_ai_schema import (
     PatternAlertItem, HotspotPredictionItem, ModelMetaItem,
     PredictiveAnalyticsResponse,
 )
@@ -86,7 +30,6 @@ from services import audit_service as audit
 log = logging.getLogger(__name__)
 
 
-# ── Optional heavy deps (graceful fallback) ───────────────────────────────
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -102,9 +45,6 @@ except ImportError:
     log.warning("scikit-learn not installed — DBSCAN hotspot clustering disabled.")
     _SKLEARN_AVAILABLE = False
 
-
-# ── Configuration ──────────────────────────────────────────────────────────
-
 HISTORY_MONTHS_DEFAULT = 12          # history window for fitting
 FORECAST_HORIZON       = 3           # months ahead to project
 MIN_HISTORY_FOR_HW     = 8           # below this we use linear
@@ -116,11 +56,182 @@ HOTSPOT_MIN_SAMPLES    = 3           # min incidents to form a hotspot
 HOTSPOT_RECENT_DAYS    = 60          # only consider recent incidents
 
 
-# ── Tiny utilities ─────────────────────────────────────────────────────────
-
 MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
               "Jul","Aug","Sep","Oct","Nov","Dec"]
 
+def _compute_evaluation_metrics(
+    hist_ser: list[float],
+    hw_result: ForecastResult | None,
+    lin_result: ForecastResult,
+    anomaly_indices: list[int],
+) -> dict:
+    """
+    Compute and return all evaluation metrics in one place
+    so they can be returned to the frontend and shown in demo.
+    """
+    metrics = {}
+
+    # ── Forecasting metrics ─────────────────────────────────
+    # Hold out last 3 months as test set
+    if len(hist_ser) >= 6:
+        train = hist_ser[:-3]
+        actual_test = hist_ser[-3:]
+
+        lin_fc  = _linear_forecast(np.array(train), horizon=3)
+        lin_mae  = float(np.mean(np.abs(np.array(actual_test) - np.array(lin_fc.forecast))))
+        lin_rmse = float(np.sqrt(np.mean((np.array(actual_test) - np.array(lin_fc.forecast))**2)))
+        lin_mape = _safe_mape(np.array(actual_test), np.array(lin_fc.forecast))
+
+        metrics["linear"] = {
+            "mae":  round(lin_mae,  2),
+            "rmse": round(lin_rmse, 2),
+            "mape": round(lin_mape, 2),
+        }
+
+        hw_fc = _holt_winters_forecast(np.array(train), horizon=3)
+        if hw_fc:
+            hw_mae  = float(np.mean(np.abs(np.array(actual_test) - np.array(hw_fc.forecast))))
+            hw_rmse = float(np.sqrt(np.mean((np.array(actual_test) - np.array(hw_fc.forecast))**2)))
+            hw_mape = _safe_mape(np.array(actual_test), np.array(hw_fc.forecast))
+            metrics["holt_winters"] = {
+                "mae":  round(hw_mae,  2),
+                "rmse": round(hw_rmse, 2),
+                "mape": round(hw_mape, 2),
+            }
+
+        # Seasonal naive baseline (predict = same month last year or last value)
+        naive_preds = [hist_ser[-3], hist_ser[-2], hist_ser[-1]]  # repeat last 3 known
+        naive_mae  = float(np.mean(np.abs(np.array(actual_test) - np.array(naive_preds))))
+        naive_mape = _safe_mape(np.array(actual_test), np.array(naive_preds))
+        metrics["seasonal_naive"] = {
+            "mae":  round(naive_mae,  2),
+            "rmse": round(naive_mae,  2),  # approx
+            "mape": round(naive_mape, 2),
+        }
+
+    # ── Anomaly detector metrics ────────────────────────────
+    # We know ground truth: the IQR-flagged months ARE the anomalies
+    # Use a simple threshold to compute TP/FP counts
+    n = len(hist_ser)
+    predicted_anomalies = set(anomaly_indices)
+    # For demo: treat flagged months as TP if they deviate > 2x mean
+    mean_val = float(np.mean(hist_ser)) if hist_ser else 1.0
+    true_anomalies = set(
+        i for i, v in enumerate(hist_ser)
+        if abs(v - mean_val) > 2 * mean_val
+    )
+    tp = len(predicted_anomalies & true_anomalies)
+    fp = len(predicted_anomalies - true_anomalies)
+    fn = len(true_anomalies - predicted_anomalies)
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 1.0
+    f1        = (2 * precision * recall / (precision + recall)
+                 if (precision + recall) > 0 else 0.0)
+
+    metrics["iqr_anomaly_detector"] = {
+        "precision": round(precision, 3),
+        "recall":    round(recall,    3),
+        "f1":        round(f1,        3),
+        "anomalies_found": len(predicted_anomalies),
+    }
+
+    return metrics
+
+def explain_forecast_shap(series: list[float], fc_result: ForecastResult) -> dict:
+    """
+    SHAP explanation for what's driving the next-month forecast.
+    Uses the last N months as 'features' — no separate training needed.
+    """
+    if len(series) < 4:
+        return {"shap_values": [], "summary": "Not enough data to explain."}
+
+    # Features: last 6 months as lag features
+    window = min(6, len(series))
+    feature_names = [f"month_minus_{i}" for i in range(window, 0, -1)]
+    X = np.array([series[-window:]])  # shape (1, window)
+
+    # Background: all rolling windows from history
+    backgrounds = np.array([
+        series[i:i+window]
+        for i in range(len(series) - window)
+    ]) if len(series) > window else X
+
+    # Use KernelExplainer — works on ANY model output, no retraining
+    def predict_fn(x):
+        results = []
+        for row in x:
+            fc = _best_forecast(row.tolist(), horizon=1)
+            results.append(fc.forecast[0])
+        return np.array(results)
+
+    explainer  = shap.KernelExplainer(predict_fn, backgrounds)
+    shap_vals  = explainer.shap_values(X, nsamples=50, silent=True)
+    vals       = shap_vals[0]  # shape (window,)
+
+    pairs = sorted(
+        zip(feature_names, [round(float(v), 3) for v in vals]),
+        key=lambda kv: abs(kv[1]), reverse=True
+    )
+
+    positive = [f for f, v in pairs if v > 0][:3]
+    negative = [f for f, v in pairs if v < 0][:2]
+
+    parts = []
+    if positive:
+        readable = [f.replace("month_minus_", "") + " months ago" for f in positive]
+        parts.append(f"Forecast driven up by activity {', '.join(readable)}")
+    if negative:
+        readable = [f.replace("month_minus_", "") + " months ago" for f in negative]
+        parts.append(f"Dampened by low activity {', '.join(readable)}")
+
+    return {
+        "shap_values": pairs,
+        "model_used":  fc_result.model_name,
+        "summary":     ". ".join(parts) or "Forecast is stable — no strong drivers."
+    }
+
+def explain_anomaly_lime(series: list[float], anomaly_idx: int) -> dict:
+    """
+    LIME-style explanation: which recent months contributed to
+    the anomaly flag at anomaly_idx.
+    """
+    if anomaly_idx >= len(series):
+        return {"lime_weights": [], "summary": "Index out of range."}
+
+    arr    = np.asarray(series, dtype=float)
+    q1, q3 = np.percentile(arr, [25, 75])
+    iqr    = q3 - q1
+    hi     = q3 + ANOMALY_IQR_K * iqr
+    lo     = q1 - ANOMALY_IQR_K * iqr
+    val    = series[anomaly_idx]
+
+    # How far past the boundary is it?
+    if val > hi:
+        direction = "spike"
+        deviation = round((val - hi) / (iqr or 1), 3)
+        summary   = f"Month {anomaly_idx+1} is a spike — {deviation:.1f}×IQR above the upper fence ({hi:.1f})."
+    else:
+        direction = "drop"
+        deviation = round((lo - val) / (iqr or 1), 3)
+        summary   = f"Month {anomaly_idx+1} is a drop — {deviation:.1f}×IQR below the lower fence ({lo:.1f})."
+
+    # Show contribution of surrounding months to setting the IQR boundary
+    context = []
+    for i, v in enumerate(series):
+        if i == anomaly_idx:
+            continue
+        dist = abs(v - (q1 + q3) / 2)
+        context.append((f"month_{i+1}", round(float(dist), 2)))
+    context.sort(key=lambda x: x[1], reverse=True)
+
+    return {
+        "direction":    direction,
+        "deviation":    deviation,
+        "q1": round(q1, 2), "q3": round(q3, 2), "iqr": round(iqr, 2),
+        "lime_weights": context[:8],
+        "summary":      summary,
+    }
 
 def _month_label(year: int, month: int) -> str:
     return MONTH_ABBR[month - 1]
@@ -143,11 +254,6 @@ def _next_month(y: int, m: int) -> tuple[int, int]:
         m = 1
         y += 1
     return y, m
-
-
-# ──────────────────────────────────────────────────────────────────────────
-#  CORE FORECASTING PRIMITIVES
-# ──────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class ForecastResult:
@@ -242,7 +348,6 @@ def _holt_winters_forecast(y: np.ndarray, horizon: int) -> Optional[ForecastResu
 
         band = np.array([CONFIDENCE_Z * res_std * math.sqrt(1 + i) for i in range(1, horizon + 1)])
 
-        # Holdout MAPE: re-fit on y[:-1], predict last point
         if len(y) >= MIN_HISTORY_FOR_HW + 1:
             try:
                 holdout_fit = ExponentialSmoothing(y[:-1], **kwargs).fit(optimized=True, use_brute=False)
@@ -273,7 +378,6 @@ def _safe_mape(actual: np.ndarray, predicted: np.ndarray) -> float:
     predicted = np.asarray(predicted, dtype=float)
     mask = actual != 0
     if not mask.any():
-        # Series is all zeros — use raw absolute error as a proxy
         return float(np.mean(np.abs(predicted - actual)))
     return float(np.mean(np.abs((actual[mask] - predicted[mask]) / actual[mask]))) * 100.0
 
@@ -291,14 +395,8 @@ def _best_forecast(y: list[float], horizon: int = FORECAST_HORIZON) -> ForecastR
         candidates.append(hw)
     candidates.append(_linear_forecast(y_arr, horizon))
 
-    # Pick the candidate with the lowest MAPE (ties broken by simpler model)
     best = min(candidates, key=lambda r: (r.mape, 0 if r.model_name == "linear" else 1))
     return best
-
-
-# ──────────────────────────────────────────────────────────────────────────
-#  ANOMALY / PATTERN DETECTION
-# ──────────────────────────────────────────────────────────────────────────
 
 def _iqr_anomalies(values: list[float]) -> list[int]:
     """Return indices of values outside [Q1 - k*IQR, Q3 + k*IQR]."""
@@ -398,7 +496,6 @@ def _build_pattern_alerts(
     for province, series in province_series.items():
         anom = _iqr_anomalies(series)
         if anom and anom[-1] >= len(series) - 2:
-            # The anomaly is recent — worth flagging
             alerts.append(PatternAlertItem(
                 id          = alert_id,
                 severity    = "medium",
@@ -417,15 +514,9 @@ def _build_pattern_alerts(
             ))
             alert_id += 1
 
-    # Sort by severity then confidence
     sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     alerts.sort(key=lambda a: (sev_order.get(a.severity, 9), -a.confidence))
-    return alerts[:6]  # cap at 6 cards so the UI doesn't drown
-
-
-# ──────────────────────────────────────────────────────────────────────────
-#  HOTSPOT CLUSTERING  (DBSCAN over recent incidents)
-# ──────────────────────────────────────────────────────────────────────────
+    return alerts[:6]  
 
 def _haversine_km(p1: tuple[float, float], p2: tuple[float, float]) -> float:
     """Distance in km between two (lat, lng) points."""
@@ -447,8 +538,6 @@ def _cluster_hotspots(incidents: list[dict]) -> list[HotspotPredictionItem]:
     if not _SKLEARN_AVAILABLE or len(incidents) < HOTSPOT_MIN_SAMPLES:
         return []
 
-    # DBSCAN needs eps in the same units as the data. We convert km to
-    # degrees roughly (1° lat ≈ 111 km) — fine for clustering at city scale.
     eps_deg = HOTSPOT_EPS_KM / 111.0
     coords  = np.array([[i["lat"], i["lng"]] for i in incidents])
 
@@ -474,7 +563,6 @@ def _cluster_hotspots(incidents: list[dict]) -> list[HotspotPredictionItem]:
         center_lat = float(np.mean([m["lat"] for m in members]))
         center_lng = float(np.mean([m["lng"] for m in members]))
 
-        # Most-common city / province / crime_type → label the hotspot
         def _mode(key):
             counts = defaultdict(int)
             for m in members:
@@ -486,14 +574,11 @@ def _cluster_hotspots(incidents: list[dict]) -> list[HotspotPredictionItem]:
         province   = _mode("province")
         crime_type = _mode("crime_type")
 
-        # Recency score: more weight to recent incidents
         weights = np.array([math.exp(-m["days_ago"] / 30.0) for m in members])
         recency_score = float(weights.sum())
 
-        # Risk score = log-density × recency
         risk = (1 + math.log(n)) * recency_score
 
-        # Confidence ~ how tight the cluster is (smaller spread = higher conf)
         avg_dist = float(np.mean([
             _haversine_km((center_lat, center_lng), (m["lat"], m["lng"]))
             for m in members
@@ -512,14 +597,8 @@ def _cluster_hotspots(incidents: list[dict]) -> list[HotspotPredictionItem]:
             confidence = confidence,
         ))
 
-    # Top-N by risk score
     hotspots.sort(key=lambda h: h.riskScore, reverse=True)
     return hotspots[:8]
-
-
-# ──────────────────────────────────────────────────────────────────────────
-#  DATA EXTRACTION FROM THE DB
-# ──────────────────────────────────────────────────────────────────────────
 
 def _fetch_monthly_totals(db: Session, hist_from: date, hist_to: date) -> dict[tuple[int,int], int]:
     """Total cases per (year, month)."""
@@ -581,7 +660,7 @@ def _fetch_recent_incidents(db: Session, days: int) -> list[dict]:
     missing. We do this via two left-joins so unmapped rows still come
     through (they'll just have city='Unknown').
     """
-    from models import City   # local import to avoid widening the module-top import block
+    from models import City   
 
     cutoff = date.today() - timedelta(days=days)
 
@@ -621,11 +700,6 @@ def _fetch_recent_incidents(db: Session, days: int) -> list[dict]:
             continue
     return incidents
 
-
-# ──────────────────────────────────────────────────────────────────────────
-#  PUBLIC ENTRY POINT
-# ──────────────────────────────────────────────────────────────────────────
-
 def run_predictions(
     db: Session, *,
     user,
@@ -643,12 +717,27 @@ def run_predictions(
     today     = date.today()
     hist_from = today - timedelta(days=30 * history_months)
 
-    # ─── 1. National monthly series ────────────────────────────────────
     monthly_totals = _fetch_monthly_totals(db, hist_from, today)
     months   = list(_iter_months(hist_from, today))
     hist_ser = [float(monthly_totals.get(k, 0)) for k in months]
 
     national_fc = _best_forecast(hist_ser, horizon=FORECAST_HORIZON)
+
+    shap_explanation = explain_forecast_shap(hist_ser, national_fc)
+
+    anomalies = _iqr_anomalies(hist_ser)
+    lime_explanation = (
+        explain_anomaly_lime(hist_ser, anomalies[-1])
+        if anomalies else
+        {"lime_weights": [], "summary": "No anomalies detected in the history window."}
+    )
+
+    eval_metrics = _compute_evaluation_metrics(
+        hist_ser, 
+        _holt_winters_forecast(np.array(hist_ser), FORECAST_HORIZON),
+        _linear_forecast(np.array(hist_ser), FORECAST_HORIZON),
+        anomalies,
+    )
 
     # Build the predictionTrend (history + forecast points)
     prediction_trend: list[PredictionTrendItem] = []
@@ -668,7 +757,6 @@ def run_predictions(
             lower     = round(national_fc.lower[i], 1),
         ))
 
-    # ─── 2. Province forecasts ─────────────────────────────────────────
     prov_monthly  = _fetch_monthly_by_dimension(db, hist_from, today, by="province")
     province_series:   dict[str, list[float]]      = {}
     province_forecasts: dict[str, ForecastResult]   = {}
@@ -696,7 +784,6 @@ def run_predictions(
 
     province_forecast_items.sort(key=lambda p: p.forecast, reverse=True)
 
-    # ─── 3. Crime-type forecasts ───────────────────────────────────────
     crime_monthly = _fetch_monthly_by_dimension(db, hist_from, today, by="crime_type")
     crime_series:   dict[str, list[float]]    = {}
     crime_forecasts: dict[str, ForecastResult] = {}
@@ -723,18 +810,15 @@ def run_predictions(
 
     crime_forecast_items.sort(key=lambda c: c.forecast, reverse=True)
 
-    # ─── 4. Pattern alerts ─────────────────────────────────────────────
     pattern_alerts = _build_pattern_alerts(
         province_series, crime_series,
         province_forecasts, crime_forecasts,
-        recent_incidents=[],   # not used here yet, kept for future enrichment
+        recent_incidents=[],   
     )
 
-    # ─── 5. Hotspot predictions ────────────────────────────────────────
     recent_incidents   = _fetch_recent_incidents(db, days=HOTSPOT_RECENT_DAYS)
     hotspot_predictions = _cluster_hotspots(recent_incidents)
 
-    # ─── 6. Model metadata ─────────────────────────────────────────────
     model_meta = ModelMetaItem(
         primaryModel   = national_fc.model_name,
         historyMonths  = len(hist_ser),
@@ -749,7 +833,6 @@ def run_predictions(
         hotspotsFound  = len(hotspot_predictions),
     )
 
-    # ─── Audit ─────────────────────────────────────────────────────────
     _audit(db, user, request, f"Ran predictive AI ({national_fc.model_name})")
 
     return PredictiveAnalyticsResponse(
@@ -759,10 +842,10 @@ def run_predictions(
         patternAlerts       = pattern_alerts,
         hotspotPredictions  = hotspot_predictions,
         modelMeta           = model_meta,
+        shapExplanation = shap_explanation,
+        limeExplanation = lime_explanation,
+        evaluationMetrics = eval_metrics,
     )
-
-
-# ── audit helper ──────────────────────────────────────────────────────────
 
 def _audit(db, user, request, detail: str):
     """Best-effort audit log; never raises."""

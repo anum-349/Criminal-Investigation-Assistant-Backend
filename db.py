@@ -13,7 +13,6 @@ DATABASE_URL = os.environ.get(
     "sqlite:///./sqlite_data/criminal_investigation.db",
 )
 
-# 2. Engine
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args["check_same_thread"] = False
@@ -26,7 +25,6 @@ engine = create_engine(
 )
 
 
-# 3. SQLite PRAGMA listener — THE critical bit
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     # Only run for SQLite — detect by checking the driver class name.

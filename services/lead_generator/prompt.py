@@ -1,36 +1,3 @@
-"""
-services/lead_generator/prompt.py
-─────────────────────────────────────────────────────────────────────────────
-Phase 3a (v2): build the system + user prompts for Llama against the
-comprehensive CaseContext.
-
-The user prompt now has 13 sections instead of 7:
-
-    1.  CASE              (header, location, crime-type subtype)
-    2.  SUSPECTS          (with per-suspect FLAGS: NO_ALIBI, etc.)
-    3.  VICTIMS           (with FLAGS: DECEASED_NO_POSTMORTEM, OVERDUE_FOLLOW_UP …)
-    4.  WITNESSES         (with FLAGS: LOW_CREDIBILITY, PROTECTION_REQUIRED …)
-    5.  STATEMENTS        (one block — alibis + witness + victim statements)
-    6.  FORENSIC FINDINGS (victim_forensic_findings rows by victim)
-    7.  EVIDENCE          (with per-item FLAGS: PENDING_ANALYSIS, STALE_PENDING)
-    8.  FIR ENTITIES      (with MATCHED / UNMATCHED tags)
-    9.  LINKED CASES      (with shared-suspect CNICs surfaced)
-    10. NEARBY INCIDENTS  (Haversine pass, real counts only)
-    11. TIMELINE          (last 15 events)
-    12. INVESTIGATOR NOTES (recent hypotheses)
-    13. COMPLETENESS      (missing fields + system inconsistencies)
-    14. DERIVED GAPS      (the ready-made list of inconsistencies)
-
-The system prompt is expanded to allow the LLM to cite witness IDs,
-evidence IDs, finding IDs, and note IDs — not just suspect IDs and case
-IDs. Every cite still has to match the validator's sets.
-
-The "gaps" section is the most important UX win: it tells the LLM
-exactly what to focus on. Without it, Llama 3.1 8B tends to suggest
-generic things ("interview the suspect") instead of grounded ones
-("Suspect SUS-2053-01 has been detained 18 days — verify remand
-authorisation").
-"""
 from __future__ import annotations
 
 from datetime import date
@@ -44,21 +11,6 @@ from services.lead_generator.context import (
     CompletenessCtx,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Allowed enum values (must match lkp_lead_types / lkp_severities)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Expanded type list. Each maps cleanly to one or more gap codes:
-#   "Witness Statement"      ← LOW_CRED_AS_PRIMARY / contradictions
-#   "Forensic"               ← DECEASED_NO_POSTMORTEM, EVIDENCE_BACKLOG
-#   "Suspect Lead"           ← SUSPECT_NO_ALIBI / RECORD_NOT_ARRESTED
-#   "Cross-reference"        ← CROSS_CASE_SHARED_SUSPECT
-#   "Location Pattern"       ← SPATIAL_PATTERN
-#   "Case Linkage"           ← linked-case patterns
-#   "Procedural"             ← DETAINED_BEYOND_LIMIT / OVERDUE_FOLLOW_UP
-#   "Evidence"               ← CCTV_FLAG_NO_EVIDENCE, ENTITY_VEHICLE_UNMATCHED
-#   "Suspect Pattern"        ← repeating offender pattern
-#   "Weapon Match"           ← shared-weapon link
 ALLOWED_LEAD_TYPES = [
     "Suspect Match",    
     "Suspect Pattern",  
@@ -78,10 +30,6 @@ ALLOWED_LEAD_TYPES = [
 
 ALLOWED_SEVERITIES = ["Low", "Normal", "High", "Critical"]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# System prompt (constant)
-# ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = dedent(f"""\
 You are a senior criminal investigation analyst assisting Pakistani police investigators.
 You receive the COMPLETE structured investigation context including:
@@ -354,9 +302,6 @@ Before returning:
 - verify no duplicate angle
 - verify each lead is operationally actionable
 """)
-# ─────────────────────────────────────────────────────────────────────────────
-# Section renderers — all pure functions, no DB
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _fmt_date(d: Optional[date]) -> str:
     return d.strftime("%Y-%m-%d") if d else "—"
@@ -752,11 +697,6 @@ def _section_gaps(gaps: List[GapCtx]) -> str:
         if refs:
             out.append(refs)
     return "\n".join(out)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Top-level prompt builder
-# ─────────────────────────────────────────────────────────────────────────────
 
 def build_user_prompt(ctx: CaseContext) -> str:
     """Stitch every section into the prompt body. Sections are ordered so

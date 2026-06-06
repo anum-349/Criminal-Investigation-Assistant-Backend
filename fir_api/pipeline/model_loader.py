@@ -9,10 +9,6 @@ from typing import Any, Optional
 logger = logging.getLogger("fir.models")
 logger.setLevel(logging.INFO)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────────────────────────────────────
 _BASE       = os.path.dirname(os.path.abspath(__file__))
 _MODELS_DIR = os.path.join(_BASE, "..", "models")
 
@@ -20,30 +16,12 @@ SBERT_MODEL    = os.getenv("FIR_EMBEDDING_MODEL", os.path.join(_MODELS_DIR, "par
 SPACY_EN_MODEL = os.getenv("FIR_SPACY_EN_MODEL",  "en_core_web_sm")
 HF_CACHE       = os.getenv("HF_HOME", "/root/.cache/huggingface")
 
-# ── Removed (now handled by Groq / fir_smart_ocr) ────────────────────────────
-# MARIAN_UR_EN_MODEL  — translator_pipeline  (MarianMT)
-# URDU_NER_MODEL      — urdu_ner_pipeline    (mBERT fine-tune)
-#
-# Still needed by:
-#   sentence_embedder  → backfill_embeddings, semantic_similarity, run_backfiller
-#   fir_classifier     → fir_validator.py
-#   spacy_nlp          → entity_extractor.py
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Registry
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class ModelRegistry:
     """Holds every loaded model. Access via the global `models` instance."""
     sentence_embedder: Optional[Any] = None   # SentenceTransformer
     spacy_nlp:         Optional[Any] = None   # spacy.Language
     fir_classifier:    Optional[Any] = None   # sklearn LogisticRegression
-
-    # Removed — Groq/EasyOCR handles these now:
-    #   translator_pipeline: MarianMT Urdu→English
-    #   urdu_ner_pipeline:   mBERT Urdu NER
 
     status: dict = field(default_factory=dict)
 
@@ -59,11 +37,6 @@ class ModelRegistry:
 models = ModelRegistry()
 _warmup_lock = threading.Lock()
 _warmup_done = False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Individual loaders
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _load_embedder() -> None:
     """Multilingual MiniLM — 384-dim embeddings.
@@ -135,11 +108,6 @@ def _fit_fir_classifier() -> None:
         models.status["fir_classifier"] = f"error: {e}"
         models.fir_classifier = None
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
 def warmup() -> dict:
     """Load every remaining model. Idempotent — safe to call multiple times.
 
@@ -161,9 +129,6 @@ def warmup() -> dict:
         _load_spacy()            # cheap, do first
         _load_embedder()         # needed by classifier + embedding consumers
         _fit_fir_classifier()    # needs embedder
-
-        # _load_translator() — REMOVED (Groq handles translation)
-        # _load_urdu_ner()   — REMOVED (not needed with Groq extraction)
 
         _warmup_done = True
         logger.info("Warmup complete: %s", models.status)

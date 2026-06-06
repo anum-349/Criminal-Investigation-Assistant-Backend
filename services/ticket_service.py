@@ -1,4 +1,3 @@
-# services/ticket_service.py
 import secrets
 from datetime import UTC, datetime
 from typing import Optional, List
@@ -8,7 +7,7 @@ from sqlalchemy import desc, or_
 from fastapi import HTTPException, Request
 
 from models import Ticket, TicketReply, TicketStatus, User, Notification, Severity
-from schemas.ticket_schema import (
+from schemas.admin.ticket_schema import (
     CreateTicketRequest, UpdateTicketRequest,
     AddReplyRequest, TicketOut, TicketReplyOut, TicketListOut,
 )
@@ -16,9 +15,6 @@ from services import audit_service as audit
 import logging
 
 log = logging.getLogger(__name__)
-
-
-# ── helpers ───────────────────────────────────────────────────────────────
 
 def _ticket_status(db: Session, code: str) -> TicketStatus:
     row = db.query(TicketStatus).filter(TicketStatus.code == code).first()
@@ -101,8 +97,6 @@ def _notify_sender(db: Session, *, ticket: Ticket, title: str, message: str):
         created_at      = datetime.now(UTC),
     ))
 
-
-# ── public API ────────────────────────────────────────────────────────────
 
 def create_ticket(
     db: Session, *, user: User,
@@ -261,7 +255,6 @@ def add_reply(
 ) -> TicketOut:
     t = _load_ticket_by_str(db, ticket_id)
 
-    # Only the sender or any admin may reply
     if user.role != "admin" and t.sender_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -275,7 +268,6 @@ def add_reply(
     )
     db.add(reply)
 
-    # Auto-move to IN_PROGRESS when admin first replies
     if is_admin:
         in_progress = _ticket_status(db, "IN_PROGRESS")
         open_status = _ticket_status(db, "OPEN")
@@ -327,9 +319,6 @@ def delete_ticket(
         db.rollback()
         raise HTTPException(status_code=500, detail="Delete failed")
     return {"deleted": True, "ticket_id": ticket_id}
-
-
-# ── private loaders ───────────────────────────────────────────────────────
 
 def _load_ticket(db: Session, pk: int) -> Ticket:
     t = (

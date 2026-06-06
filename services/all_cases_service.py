@@ -10,7 +10,7 @@ from models import (
     Location, City
 )
 from services import audit_service as audit
-from schemas.all_cases_schema import (
+from schemas.cases.all_cases_schema import (
     AllCasesRow,
     TabCounts,
     FilterOptions,

@@ -13,15 +13,6 @@ logger = logging.getLogger("fir.validator")
 
 CONFIDENCE_THRESHOLD = 0.40  # tuned on the synthetic CV set; see notes below
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Training corpus
-# ─────────────────────────────────────────────────────────────────────────────
-# This is the key knob. The classifier is only as good as these examples.
-# Each entry is a (short) realistic snippet that a FIR (or non-FIR) would
-# contain. We mix English, Urdu, and Roman-Urdu so the multilingual embedder
-# learns the FIR concept across script and register.
-
 _POSITIVE_EXAMPLES: List[str] = [
     # English FIRs
     "FIR Number 234/2024. Police Station Gulberg, District Lahore. Complainant Muhammad Usman, age 34. Incident: armed robbery at gunpoint. Section 392 PPC.",
@@ -77,11 +68,6 @@ def _build_training_corpus() -> Tuple[List[str], List[int]]:
     labels = [1] * len(_POSITIVE_EXAMPLES) + [0] * len(_NEGATIVE_EXAMPLES)
     return texts, labels
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Critical-field heuristic (sanity check on top of the classifier)
-# ─────────────────────────────────────────────────────────────────────────────
-
 _CRITICAL_PATTERNS: Dict[str, re.Pattern] = {
     "FIR Number":        re.compile(r"(fir|case|maqdam|mukadma|ایف آئی آر|مقدمہ)[\s\-#:نمبر]*\d+", re.I),
     "Complainant Name":  re.compile(r"(complainant|maddai|petitioner|مدعی|شاکی)[:\s]+\S+", re.I),
@@ -98,13 +84,6 @@ def check_missing_fields(text: str) -> List[str]:
     return [name for name, pat in _CRITICAL_PATTERNS.items() if not pat.search(text)]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# XAI: keyword evidence (kept for the frontend XAI panel)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# These aren't *used* by the classifier — they're a UI artifact. We surface
-# any of these that appear in the input so the investigator sees a list of
-# "signals the model noticed". The actual decision is made by SBERT + LR.
 _DISPLAY_KEYWORDS_POSITIVE = [
     "FIR", "fir number", "police station", "complainant", "accused", "witness",
     "section", "PPC", "investigation", "arrest", "incident", "thana",
@@ -128,11 +107,6 @@ def _keyword_evidence(text: str) -> List[Dict]:
             ev.append({"term": kw, "direction": "negative", "weight": -1.0})
     return ev[:15]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public result type
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class ValidationResult:
     is_fir:           bool
@@ -155,11 +129,6 @@ class ValidationResult:
             "top_features":     self.evidence,
         }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main validation function
-# ─────────────────────────────────────────────────────────────────────────────
-
 def validate_fir(text: str) -> dict:
     """Run the FIR classifier on `text` and return a dict ready for the
     orchestrator to merge into its response."""
@@ -175,11 +144,9 @@ def validate_fir(text: str) -> dict:
     clf      = models.fir_classifier
 
     if embedder is None or clf is None:
-        # Should never happen post-warmup, but degrade gracefully.
         logger.warning("Classifier unavailable — falling back to keyword heuristic.")
         return _heuristic_fallback(text)
 
-    # ── Real prediction ──────────────────────────────────────────────────────
     emb = embedder.encode([text[:4000]], show_progress_bar=False)
     proba = clf.predict_proba(emb)[0]
     fir_prob = float(proba[1])

@@ -12,7 +12,7 @@ from models import (
     CaseType, Province, City, Severity,
     GeneratedReport,
 )
-from schemas.report_schema import (
+from schemas.admin.report_schema import (
     GenerateReportRequest, ReportData, ReportSection,
     ReportHistoryItem, ReportHistoryList,
 )
@@ -22,8 +22,6 @@ import logging
 
 log = logging.getLogger(__name__)
 
-
-# ── helpers ────────────────────────────────────────────────────────────────
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
     if not s:
@@ -53,8 +51,6 @@ def _str(v) -> str:
         return v.strftime("%d %b %Y")
     return str(v)
 
-
-# ── report builders ────────────────────────────────────────────────────────
 
 def _build_case_summary(db: Session, filters) -> ReportData:
     case_id = (filters.caseId or "").strip()
@@ -152,7 +148,6 @@ def _build_case_summary(db: Session, filters) -> ReportData:
     if len(evidence_rows) == 1:
         evidence_rows.append(["No evidence recorded", "—", "—", "—", "—"])
 
-    # ── Witnesses section
     witness_rows = [["Name / Anon", "Gender", "Age", "Relation", "Credibility"]]
     for w in case.witnesses:
         p = w.person
@@ -183,7 +178,6 @@ def _build_crime_hotspot(db: Session, filters) -> ReportData:
     date_from = _parse_date(filters.dateFrom)
     date_to   = _parse_date(filters.dateTo) or date.today()
 
-    # Province breakdown
     q = (
         db.query(
             Province.label,
@@ -206,7 +200,6 @@ def _build_crime_hotspot(db: Session, filters) -> ReportData:
     if len(province_rows) == 1:
         province_rows.append(["No data", "0"])
 
-    # Crime type breakdown
     q2 = (
         db.query(
             CaseType.label,
@@ -366,9 +359,6 @@ def _build_suspect_report(db: Session, filters) -> ReportData:
         sections=[ReportSection(heading="Suspect Records", rows=suspect_rows)],
     )
 
-
-# ── dispatch table ─────────────────────────────────────────────────────────
-
 BUILDERS = {
     "case_summary":   _build_case_summary,
     "crime_hotspot":  _build_crime_hotspot,
@@ -376,9 +366,6 @@ BUILDERS = {
     "leads_report":   _build_leads_report,
     "suspect_report": _build_suspect_report,
 }
-
-
-# ── public API ─────────────────────────────────────────────────────────────
 
 def generate_report(
     db: Session, *,
@@ -392,7 +379,6 @@ def generate_report(
 
     data = builder(db, body.filters)
 
-    # Persist to generated_reports
     try:
         record = GeneratedReport(
             report_id        = _gen_report_id(db),
@@ -412,7 +398,6 @@ def generate_report(
     except Exception:
         db.rollback()
         log.warning("Could not persist report record", exc_info=True)
-        # Non-fatal — still return the data
 
     return data
 

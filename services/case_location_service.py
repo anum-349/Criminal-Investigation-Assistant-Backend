@@ -13,7 +13,7 @@ from models import (
     TimelineEvent, TimelineEventType,
 )
 from services import audit_service as audit
-from schemas.case_location_schema import (
+from schemas.persons.case_location_schema import (
     LatLng,
     CrimeSceneAddress,
     SceneSecurity,

@@ -1,20 +1,3 @@
-# services/case_linker_hook.py — UPDATE for v3 engine
-# ─────────────────────────────────────────────────────────────────────────────
-# Two small changes vs the previous version:
-#
-#  1. _notify_link_created now pulls the headline directly from the engine's
-#     output (via LinkProposal) rather than rebuilding a message from
-#     LINK_TYPE_HUMAN. The headline is already a complete sentence written
-#     by the engine ("Bilal Hussain (CNIC ...) appears in both cases..."),
-#     so reusing it gives the toast and the table the same narrative.
-#
-#  2. recompute_links_for_case stashes the LinkProposal alongside the
-#     CaseLink row so we can use its `headline` in the notification. Same
-#     idea as before, just plumbed cleanly.
-#
-# Replace recompute_links_for_case and _notify_link_created with the
-# versions below. Everything else in case_linker_hook.py stays as-is.
-# ─────────────────────────────────────────────────────────────────────────────
 
 from typing import List, Optional, Tuple
 import logging
@@ -63,8 +46,6 @@ def recompute_links_for_case(
     existing_by_key = {(l.target_case_id, l.link_type): l for l in existing}
     proposed_keys = {(p.target_case_id, p.link_type) for p in proposals}
 
-    # We track (link_row, proposal) pairs so the notifier can use the
-    # engine's headline directly.
     newly_created: List[Tuple[CaseLink, LinkProposal]] = []
 
     for p in proposals:
@@ -94,7 +75,6 @@ def recompute_links_for_case(
             if changed:
                 log.info("  → UPDATED link id=%s", link.id)
 
-        # Always refresh shared_entities.
         db.query(CaseLinkSharedEntity).filter(
             CaseLinkSharedEntity.link_id == link.id
         ).delete(synchronize_session=False)
@@ -106,13 +86,11 @@ def recompute_links_for_case(
                 person_id=person_id,
             ))
 
-    # Delete stale links.
     for key, link in existing_by_key.items():
         if key not in proposed_keys:
             log.info("  → DELETING stale link id=%s", link.id)
             db.delete(link)
 
-    # Notify on NEW high-confidence links.
     for link, proposal in newly_created:
         if (link.similarity_score or 0.0) >= HIGH_CONFIDENCE_THRESHOLD:
             _notify_link_created(db, link=link, proposal=proposal, actor_user_id=actor_user_id)

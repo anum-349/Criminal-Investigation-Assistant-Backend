@@ -16,9 +16,9 @@ from models import (
     Severity,
     TimelineEvent, TimelineEventType,
 )
-from schemas.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
+from schemas.common.user_schema import PersonPhotoDeleteResult, PersonPhotoUploadResult
 from services import audit_service as audit
-from schemas.case_witness_schema import (
+from schemas.persons.case_witness_schema import (
     WitnessRow, CaseWitnessesList,
     UpdateWitnessRequest, 
 )

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from fastapi import HTTPException, Request
 
-from auth.jwt import create_access_token
+from dependencies.auth import create_access_token
 from models import User, UserPreference, UserRole, UserRolePermission, Permission, Investigator, Admin
 from services import audit_service as audit
 from services.service_helper import MAX_PHOTO_BYTES, UPLOADS_ROOT, UPLOADS_URL_PREFIX
