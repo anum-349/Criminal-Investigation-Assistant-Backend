@@ -30,8 +30,7 @@ COPY requirements.txt .
 # ─── Install torch from local wheels first (most expensive) ────────────────
 RUN pip install --upgrade pip setuptools wheel && \
     pip install /tmp/wheels/torch-2.4.1+cpu-cp311-cp311-linux_x86_64.whl \
-                /tmp/wheels/torchvision-0.19.1+cpu-cp311-cp311-linux_x86_64.whl \
-                --no-index && \
+                /tmp/wheels/torchvision-0.19.1+cpu-cp311-cp311-linux_x86_64.whl && \
     rm -rf /tmp/wheels
 
 # ─── Install all Python dependencies ──────────────────────────────────────

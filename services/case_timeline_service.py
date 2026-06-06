@@ -13,12 +13,12 @@ from models import (
     Severity,
     TimelineEvent, TimelineEventType,
 )
-from services import audit_service as audit
+from services.common import audit_service as audit
 from schemas.common.case_timeline_schema import (
     TimelineEventRow, TimelineCounts, CaseTimelineList,
     AddTimelineEventRequest, DeleteTimelineEventResult,
 )
-from services.service_helper import _format_officer_name, _parse_ymd, _resolve_case, _ymd
+from services.common.service_helper import _format_officer_name, _parse_ymd, _resolve_case, _ymd
 
 EVENT_SOURCE_SYSTEM = "SYSTEM"
 EVENT_SOURCE_MANUAL = "MANUAL"

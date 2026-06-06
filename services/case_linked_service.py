@@ -10,14 +10,14 @@ from models import (
     CaseLink,
 )
 
-from services import audit_service as audit
+from services.common import audit_service as audit
 from schemas.common.case_linked_schema import (
     LinkedCaseRow,
     LinkedRelationOption,
     LinkedStatusOption,
     CaseLinkedCasesList,
 )
-from services.service_helper import _resolve_case
+from services.common.service_helper import _resolve_case
 
 LINK_TYPE_LABEL = {
     "SUSPECT_MATCH":    ("Same Suspect",       "danger"),

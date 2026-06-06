@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 from models import (
     User, Case, Lead, TimelineEvent, Activity,
 )
-from services import audit_service as audit
-from services.case_lead_service import (
+from services.common import audit_service as audit, llm_client
+from services.common.db_retry import get_case_with_retry
+from services.leads.case_lead_service import (
     EVENT_SOURCE_AI,
     _lead_type_id,
     _lead_status_id_by_label,
@@ -25,14 +26,9 @@ from services.case_lead_service import (
     _resolve_similar_case,
     _timeline_event_type_id,
 )
-from services.db_retry import get_case_with_retry
-from services.service_helper import _format_officer_name
+from services.common.service_helper import _format_officer_name
 from schemas.leads.case_lead_schema import LeadRow
 
-from services import llm_client
-from services.llm_client import (
-    LLMError, LLMUnavailable, LLMTimeout, LLMBadResponse,
-)
 from services.lead_generator.context import (
     build_case_context, assess_context_depth, CaseContext,
 )
@@ -264,11 +260,11 @@ def generate_leads(
             user_prompt=user_prompt,
             max_tokens=600,
         )
-    except LLMUnavailable as e:
+    except llm_client.LLMUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except LLMTimeout as e:
+    except llm_client.LLMTimeout as e:
         raise HTTPException(status_code=504, detail=str(e))
-    except (LLMBadResponse, LLMError) as e:
+    except (llm_client.LLMBadResponse, llm_client.LLMError) as e:
         log.exception("[lead-gen] LLM call failed for case %s", ctx.case_id)
         raise HTTPException(status_code=502, detail=f"AI service error: {e}")
 

@@ -17,7 +17,7 @@ from models import (
     TimelineEvent, User,
     VictimForensicFinding, VictimLegalMilestone, VictimTimelineEntry,
 )
-from services.service_helper import _resolve_case
+from services.common.service_helper import _resolve_case
 
 log = logging.getLogger(__name__)
 

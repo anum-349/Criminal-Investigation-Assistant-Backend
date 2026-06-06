@@ -15,13 +15,13 @@ from models import (
     Activity, Severity,
     TimelineEvent, TimelineEventType,
 )
-from services import audit_service as audit
+from services.common import audit_service as audit
 from schemas.common.case_evidence_schema import (
     CaseEvidenceRow, CaseEvidenceList, EvidencePhotoOut,
     UpdateEvidenceRequest, PhotoUploadRequest,
     PhotoUploadResult, PhotoDeleteResult,
 )
-from services.service_helper import UPLOADS_ROOT, UPLOADS_URL_PREFIX, _decode_data_url, _ext_for_mime, _format_officer_name, _public_url, _resolve_case
+from services.common.service_helper import UPLOADS_ROOT, UPLOADS_URL_PREFIX, _decode_data_url, _ext_for_mime, _format_officer_name, _public_url, _resolve_case
 
 STATUS_ANALYZED = "Analyzed"
 STATUS_PENDING  = "Pending Analysis"
