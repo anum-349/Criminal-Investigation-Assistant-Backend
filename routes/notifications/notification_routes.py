@@ -76,7 +76,6 @@ def get_preferences(
     db:   Session = Depends(get_db),
     user: User    = Depends(get_current_user),
 ):
-    print("here")
     return svc.get_preferences(db, user=user)
 
 

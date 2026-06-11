@@ -10,7 +10,7 @@ logger = logging.getLogger("fir.models")
 logger.setLevel(logging.INFO)
 
 _BASE       = os.path.dirname(os.path.abspath(__file__))
-_MODELS_DIR = os.path.join(_BASE, "..", "models")
+_MODELS_DIR = os.path.join(_BASE, "models")
 
 SBERT_MODEL    = os.getenv("FIR_EMBEDDING_MODEL", os.path.join(_MODELS_DIR, "paraphrase-multilingual-MiniLM-L12-v2"))
 SPACY_EN_MODEL = os.getenv("FIR_SPACY_EN_MODEL",  "en_core_web_sm")

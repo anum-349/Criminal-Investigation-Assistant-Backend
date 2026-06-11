@@ -121,3 +121,4 @@ easyocr==1.7.2
 pymupdf==1.23.8
 groq==1.4.0
 langdetect==1.0.9
+shap==0.46.0

@@ -9,7 +9,7 @@ from models import Base
 
 load_dotenv()
 DATABASE_URL = os.environ.get(
-    "SQLALCHEMY_DATABASE_URL",
+    "DATABASE_URL",
     "sqlite:///./sqlite_data/criminal_investigation.db",
 )
 

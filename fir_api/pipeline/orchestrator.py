@@ -21,8 +21,8 @@ from fir_api.pipeline.model_loader      import models
 logger = logging.getLogger("fir.orchestrator")
 
 load_dotenv()
-GROQ_FIR_API_KEY = os.getenv("GROQ_FIR_API_KEY", "")
-GROQ_FIR_MODEL   = os.getenv("GROQ_FIR_MODEL",   "llama-3.3-70b-versatile")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL   = os.getenv("GROQ_MODEL",   "llama-3.3-70b-versatile")
 
 _groq_client: Groq | None = None
 _ocr_reader:  easyocr.Reader | None = None
@@ -119,12 +119,12 @@ def _ensure_coordinates(payload: dict) -> dict:
 def _get_groq() -> Groq:
     global _groq_client
     if _groq_client is None:
-        if not GROQ_FIR_API_KEY:
+        if not GROQ_API_KEY:
             raise RuntimeError(
-                "GROQ_FIR_API_KEY environment variable is not set. "
+                "GROQ_API_KEY environment variable is not set. "
                 "Add it to your .env or Docker environment."
             )
-        _groq_client = Groq(api_key=GROQ_FIR_API_KEY)
+        _groq_client = Groq(api_key=GROQ_API_KEY)
     return _groq_client
 
 
@@ -304,7 +304,7 @@ def _extract_regex(raw: str) -> dict:
     return found
 
 def _llama_extract(raw: str, regex: dict, language: str = "urdu") -> dict:
-    logger.info("[Groq] Calling %s (lang=%s) …", GROQ_FIR_MODEL, language)
+    logger.info("[Groq] Calling %s (lang=%s) …", GROQ_MODEL, language)
 
     if language == "english":
         system_msg = (
@@ -494,7 +494,7 @@ FIR TEXT:
 }}"""
 
     resp = _get_groq().chat.completions.create(
-        model=GROQ_FIR_MODEL,
+        model=GROQ_MODEL,
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user",   "content": prompt},
@@ -865,7 +865,7 @@ def run_pipeline(file_path: str, original_filename: str = "", on_step: callable 
             },
             "regex":  regex_fields,
             "groq": {
-                "model":            GROQ_FIR_MODEL,
+                "model":            GROQ_MODEL,
                 "suspects_count":   len(form_data["suspects"]),
                 "victims_count":    len(form_data["victims"]),
                 "witnesses_count":  len(form_data["witnesses"]),

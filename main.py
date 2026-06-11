@@ -95,9 +95,9 @@ app.include_router(investigator_router, prefix="/api", tags=["Investigator Dashb
 app.include_router(main_route.router, prefix="/api", tags=["Dashboard"])
 
 # Cases (registration, detail, drafts, links)
-app.include_router(cases_router, prefix="/api/investigator/cases", tags=["Cases"])
 app.include_router(drafts_router, prefix="/api/investigator/cases/case-drafts", tags=["Case Drafts"])
 app.include_router(case_links_router, prefix="/api/investigator/cases", tags=["Case Links"])
+app.include_router(cases_router, prefix="/api/investigator/cases", tags=["Cases"])
 
 # Investigations (FIR processing, lookups)
 app.include_router(fir_router, prefix="/api", tags=["FIR Processing"])

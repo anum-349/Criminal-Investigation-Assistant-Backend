@@ -6,10 +6,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
-if [ "${RUN_MIGRATIONS}" = "true" ]; then
+if [ "${RUN_MIGRATIONS}" = "true" ] && [ -d "/app/alembic" ]; then
   echo ">>> Running Alembic migrations..."
   alembic upgrade head
   echo ">>> Migrations done."
+elif [ "${AUTO_CREATE_TABLES}" = "true" ]; then
+  echo ">>> Using SQLAlchemy auto table creation (AUTO_CREATE_TABLES=true)"
+else
+  echo ">>> No migrations or auto-create enabled"
 fi
 
 echo ">>> Starting uvicorn..."

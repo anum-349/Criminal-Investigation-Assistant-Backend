@@ -3,19 +3,21 @@ services:
     image: postgres:16-alpine
     container_name: cia-postgres
     environment:
-      POSTGRES_DB: cia_db
-      POSTGRES_USER: cia_user
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-insecure_dev_password}
+      POSTGRES_DB: criminal_investigation_assistant
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: aqdus102
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cia_user"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d criminal_investigation_assistant"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - cia-net
 
   backend:
     build:
@@ -23,10 +25,10 @@ services:
       dockerfile: Dockerfile
     container_name: cia-backend
     environment:
-      DATABASE_URL: postgresql://cia_user:${DB_PASSWORD:-insecure_dev_password}@postgres:5432/cia_db
-      RUN_MIGRATIONS: "true"
+      DATABASE_URL: postgresql://postgres:aqdus102@postgres:5432/criminal_investigation_assistant
+      RUN_MIGRATIONS: "false"
       PYTHONUNBUFFERED: "1"
-      GROQ_FIR_API_KEY: ${GROQ_FIR_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
       JWT_SECRET: ${JWT_SECRET}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AUTO_CREATE_TABLES: "true"

@@ -23,7 +23,7 @@ from models import Base  # adjust if your Base lives elsewhere
 
 # ── 4. Pull the real DATABASE_URL (same logic as db.py) ──────────────────────
 DATABASE_URL = os.environ.get(
-    "SQLALCHEMY_DATABASE_URL",
+    "DATABASE_URL",
     "sqlite:///./sqlite_data/criminal_investigation.db",
 )
 

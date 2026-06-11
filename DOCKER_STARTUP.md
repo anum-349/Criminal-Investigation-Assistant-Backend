@@ -15,7 +15,7 @@
    cp .env.example .env
    
    # Edit .env with your actual values
-   # Required: GROQ_FIR_API_KEY, JWT_SECRET
+   # Required: GROQ_API_KEY, JWT_SECRET
    ```
 
 ---
@@ -135,7 +135,7 @@ docker compose logs backend
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GROQ_FIR_API_KEY` | ✅ Yes | Groq API key for LLM extraction |
+| `GROQ_API_KEY` | ✅ Yes | Groq API key for LLM extraction |
 | `JWT_SECRET` | ✅ Yes | Secret key for JWT token signing |
 | `DB_PASSWORD` | ✅ Yes | PostgreSQL password |
 | `LOG_LEVEL` | ❌ No | INFO, DEBUG, WARNING (default: INFO) |
