@@ -26,7 +26,7 @@ The Criminal Investigation Assistant is a comprehensive backend system designed 
 ### 1. Clone & Setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/anum-349/Criminal-Investigation-Assistant-Backend/issuestz
 cd Criminal_Investigation_Assistant_Backend
 ```
 
@@ -551,21 +551,9 @@ docker compose logs backend -f
 
 ---
 
-## 📄 License
-
-[Add your license here]
-
----
-
-## 👥 Contributing
-
-[Add contribution guidelines]
-
----
-
 ## 📞 Support
 
-For issues or questions, contact: [your-email@example.com]
+For issues or questions, contact: anumkousar552@gmail.com
 
 ---
 
