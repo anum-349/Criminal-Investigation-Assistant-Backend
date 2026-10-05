@@ -15,8 +15,6 @@ fir_api/venv/
 fir_api/.venv/
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
-.env
-.env.local
 .env.*.local
 .env.example
 
@@ -34,7 +32,6 @@ fir_api/models
 
 # ── IDE ─────────────────────────────────────────────────────────────────────
 .idea/
-.vscode/
 *.swp
 *.swo
 
@@ -48,3 +45,5 @@ desktop.ini
 logs/
 
 wheels/
+config.bat
+node_modules
